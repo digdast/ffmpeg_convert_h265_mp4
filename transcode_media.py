@@ -1,12 +1,22 @@
+#!/usr/bin/env python3
+
 import os
 import subprocess
 import sys
 import logging
 
+# Path to your media library
+media_library_path = '/path/to/your/media/library'
+
+# Target codec and format
+target_codec = 'libx264'
+target_format = 'mp4'
+
 # Function to install missing dependencies
 def install_dependencies():
     try:
         subprocess.run(['sudo', 'apt-get', 'update'], check=True)
+        subprocess.run(['sudo', 'apt-get', 'install', '-y', 'python3'], check=True)
         subprocess.run(['sudo', 'apt-get', 'install', '-y', 'ffmpeg'], check=True)
         logging.info("Dependencies installed successfully.")
     except subprocess.CalledProcessError as e:
