@@ -37,6 +37,7 @@
       <li><a href="#features">Features</a></li>
       <li><a href="#benchmarks">Benchmarks</a></li>
       <li><a href="#calculator">Savings Calculator</a></li>
+      <li><a href="install.html" style="color: var(--cyan); font-weight: 700;">Install & Docs</a></li>
       <li><a href="#quickstart">Quickstart</a></li>
       <li><a href="https://resume.ertechlab.com" target="_blank">Portfolio</a></li>
     </ul>
@@ -58,8 +59,11 @@
       Stop wasting CPU cycles and storage. Convert MKV, AVI, TS, and legacy codecs into web-streamable MP4 with zero-buffer FastStart indexing, intelligent stream inspection, and automated hardware GPU offloading.
     </p>
     <div class="hero-cta">
-      <a href="#quickstart" class="btn-primary">
-        <span>🚀 Get Started in 30 Seconds</span>
+      <a href="install.html" class="btn-primary">
+        <span>⚡ 1-Line Quick Install</span>
+      </a>
+      <a href="#calculator" class="btn-secondary">
+        <span>ROI Storage Calculator</span>
       </a>
       <a href="https://github.com/digdast/ffmpeg_convert_h265_mp4" target="_blank" class="btn-secondary">
         <span>View on GitHub (digdast) ↗</span>
@@ -308,12 +312,27 @@ Detected Engine: <span class="term-green">NVIDIA NVENC (GPU)</span> [hevc_nvenc]
     <div class="section-header">
       <div class="section-tag">// GET STARTED</div>
       <h2 class="section-title">Ready in 30 Seconds</h2>
-      <p class="section-subtitle">No compilation required. Pure Python 3 and standard FFmpeg hardware encoders.</p>
+      <p class="section-subtitle">Cross-platform 1-line installation or direct repository execution. <a href="install.html" style="color:var(--cyan); text-decoration:underline;">View Complete Install & Usage Guide ↗</a></p>
+    </div>
+
+    <!-- 1-Line Fast Install -->
+    <div class="terminal-card" style="margin-bottom: 2rem;">
+      <div class="terminal-header">
+        <div class="terminal-title">⚡ Instant 1-Line Install (Linux & macOS via curl | Windows via PowerShell)</div>
+        <button class="btn-secondary" style="padding: 0.2rem 0.6rem; font-size: 0.75rem;" onclick="copyCode(this, 'code0')">Copy</button>
+      </div>
+      <div class="terminal-body" id="code0">
+<span class="term-dim"># Linux / macOS (curl)</span>
+curl -fsSL https://ffmpeg.ertechlab.com/install.sh | bash
+
+<span class="term-dim"># Windows (PowerShell)</span>
+irm https://ffmpeg.ertechlab.com/install.ps1 | iex
+      </div>
     </div>
 
     <div class="terminal-card" style="margin-bottom: 2rem;">
       <div class="terminal-header">
-        <div class="terminal-title">1. Clone & Run with Hardware Acceleration</div>
+        <div class="terminal-title">1. Or Clone & Run Manually</div>
         <button class="btn-secondary" style="padding: 0.2rem 0.6rem; font-size: 0.75rem;" onclick="copyCode(this, 'code1')">Copy</button>
       </div>
       <div class="terminal-body" id="code1">
@@ -349,6 +368,7 @@ python3 transcode_media.py /data/downloads --delete-original
     <p>
       Created with ⚡ by <strong>Efrain Rivas</strong> (<a href="https://github.com/digdast" target="_blank">@digdast</a>) • 
       <a href="https://github.com/digdast/ffmpeg_convert_h265_mp4" target="_blank">GitHub Repository</a> • 
+      <a href="install.html">Install & Docs</a> • 
       <a href="https://resume.ertechlab.com" target="_blank">Live Systems Architecture Resume</a>
     </p>
     <p style="margin-top: 0.5rem; font-size: 0.8rem; color: var(--text-dim);">

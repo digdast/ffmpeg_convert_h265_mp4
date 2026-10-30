@@ -45,11 +45,50 @@ function copyCode(btn, codeId) {
   });
 }
 
+// Copy Direct Text Helper
+function copyText(btn, text) {
+  navigator.clipboard.writeText(text).then(() => {
+    const originalText = btn.innerHTML;
+    btn.innerHTML = '✔ Copied!';
+    setTimeout(() => {
+      btn.innerHTML = originalText;
+    }, 2000);
+  });
+}
+
+// OS Installer Tab Switching
+function switchTab(tabId) {
+  // Update buttons
+  document.querySelectorAll('.os-tab-btn').forEach(btn => {
+    btn.classList.remove('active');
+    if (btn.getAttribute('data-tab') === tabId) {
+      btn.classList.add('active');
+    }
+  });
+
+  // Update panes
+  document.querySelectorAll('.tab-pane').forEach(pane => {
+    pane.classList.remove('active');
+    if (pane.id === 'tab-' + tabId) {
+      pane.classList.add('active');
+    }
+  });
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   const sizeInput = document.getElementById('libSize');
   const codecSelect = document.getElementById('sourceCodec');
   if (sizeInput) sizeInput.addEventListener('input', updateCalculator);
   if (codecSelect) codecSelect.addEventListener('change', updateCalculator);
   updateCalculator();
+
+  // Tab button click listeners
+  document.querySelectorAll('.os-tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const tab = btn.getAttribute('data-tab');
+      if (tab) switchTab(tab);
+    });
+  });
 });
+
 

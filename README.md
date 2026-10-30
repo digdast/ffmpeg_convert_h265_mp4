@@ -90,7 +90,33 @@ flowchart TD
 
 ---
 
-## 🛠️ Installation & Prerequisites
+## ⚡ 1-Line Cross-Platform Installers
+
+Install `transcode-media` and alias `ffmpeg-convert` globally in seconds:
+
+### 🐧 Linux & 🍎 macOS (curl)
+```bash
+curl -fsSL https://ffmpeg.ertechlab.com/install.sh | bash
+```
+*Or via raw GitHub:*
+```bash
+curl -fsSL https://raw.githubusercontent.com/digdast/ffmpeg_convert_h265_mp4/main/install.sh | bash
+```
+
+### 🪟 Windows (PowerShell)
+```powershell
+irm https://ffmpeg.ertechlab.com/install.ps1 | iex
+```
+*Or via raw GitHub:*
+```powershell
+irm https://raw.githubusercontent.com/digdast/ffmpeg_convert_h265_mp4/main/install.ps1 | iex
+```
+
+> 📖 **Full Documentation & Interactive Web Guide**: Visit the live [Installation & Usage Guide](https://ffmpeg.ertechlab.com/install.html).
+
+---
+
+## 🛠️ Manual Installation & Prerequisites
 
 ### 1. Requirements
 - Python 3.9+
