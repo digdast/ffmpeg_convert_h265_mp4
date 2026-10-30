@@ -52,3 +52,4 @@ document.addEventListener('DOMContentLoaded', () => {
   if (codecSelect) codecSelect.addEventListener('change', updateCalculator);
   updateCalculator();
 });
+
