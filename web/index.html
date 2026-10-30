@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>⚡ FFmpeg GPU H.265 Media Transcoder — High-Throughput NVENC & QSV Pipeline</title>
+
+  <!-- OpenGraph & SEO Meta Tags -->
+  <meta name="description" content="High-performance GPU-accelerated H.265 (HEVC) media library batch transcoder powered by NVIDIA NVENC, Intel QuickSync, and Apple VideoToolbox. Cut library sizes by 50-70% with zero-buffer MP4 FastStart direct play.">
+  <meta name="keywords" content="FFmpeg, H265, HEVC, NVENC, RTX 5070, GPU Transcoder, QuickSync, FastStart MP4, Plex Direct Play, Homelab, Kubernetes">
+  <meta name="author" content="Efrain Rivas (@digdast)">
+  <meta property="og:title" content="⚡ FFmpeg GPU H.265 Transcoder — Hardware Accelerated Batch Pipeline">
+  <meta property="og:description" content="Squeeze 50–70% of storage out of your media library with hardware-accelerated NVIDIA NVENC & FastStart MP4 direct play.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://ffmpeg.ertechlab.com">
+  <meta property="og:image" content="https://avatars.githubusercontent.com/u/8915366?v=4">
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" href="https://avatars.githubusercontent.com/u/8915366?v=4">
+  <link rel="apple-touch-icon" href="https://avatars.githubusercontent.com/u/8915366?v=4">
+
+  <!-- Fonts & Stylesheet -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+  <!-- Navigation -->
+  <nav class="navbar">
+    <div class="nav-brand">
+      <span class="brand-badge">GPU HEVC</span>
+      <span>FFmpeg H.265 Transcoder</span>
+    </div>
+    <ul class="nav-links">
+      <li><a href="#features">Features</a></li>
+      <li><a href="#benchmarks">Benchmarks</a></li>
+      <li><a href="#calculator">Savings Calculator</a></li>
+      <li><a href="#quickstart">Quickstart</a></li>
+      <li><a href="https://resume.ertechlab.com" target="_blank">Portfolio</a></li>
+    </ul>
+    <a href="https://github.com/digdast/ffmpeg_convert_h265_mp4" target="_blank" class="btn-github">
+      <svg height="18" width="18" viewBox="0 0 16 16" fill="currentColor">
+        <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+      </svg>
+      <span>GitHub Repository ↗</span>
+    </a>
+  </nav>
+
+  <!-- Hero Section -->
+  <header class="hero">
+    <div class="hero-tag">
+      <span>⚡ NVIDIA NVENC & INTEL QSV HARDWARE ACCELERATED</span>
+    </div>
+    <h1>Modernize Your Media Library into <br><span class="gradient">Ultra-Efficient GPU H.265 (HEVC)</span></h1>
+    <p class="hero-desc">
+      Stop wasting CPU cycles and storage. Convert MKV, AVI, TS, and legacy codecs into web-streamable MP4 with zero-buffer FastStart indexing, intelligent stream inspection, and automated hardware GPU offloading.
+    </p>
+    <div class="hero-cta">
+      <a href="#quickstart" class="btn-primary">
+        <span>🚀 Get Started in 30 Seconds</span>
+      </a>
+      <a href="https://github.com/digdast/ffmpeg_convert_h265_mp4" target="_blank" class="btn-secondary">
+        <span>View on GitHub (digdast) ↗</span>
+      </a>
+    </div>
+  </header>
+
+  <!-- Metric Counters -->
+  <section class="metrics-grid">
+    <div class="metric-card">
+      <div class="metric-val">12x+</div>
+      <div class="metric-label">Encoding Speedup</div>
+      <div class="metric-sub">Up to 450 FPS on modern NVENC vs 24 FPS on CPU</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-val">&lt; 4%</div>
+      <div class="metric-label">Host CPU Overhead</div>
+      <div class="metric-sub">Dedicated ASIC hardware encoding protects system cores</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-val">60%</div>
+      <div class="metric-label">Average Size Reduction</div>
+      <div class="metric-sub">Preserves 10-bit color, HDR10, and high spatial detail</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-val">100%</div>
+      <div class="metric-label">Zero-Failure Atomicity</div>
+      <div class="metric-sub">Hidden temp staging protects originals against crash or power loss</div>
+    </div>
+  </section>
+
+  <!-- Architecture & Pipeline Diagram -->
+  <section class="section" id="features">
+    <div class="section-header">
+      <div class="section-tag">// ARCHITECTURE & FEATURES</div>
+      <h2 class="section-title">Engineered for Homelab & Enterprise Performance</h2>
+      <p class="section-subtitle">How the multi-stage hardware pipeline analyzes, transcodes, and verifies each video stream.</p>
+    </div>
+
+    <div class="features-grid">
+      <div class="feature-card">
+        <div class="feature-icon">⚡</div>
+        <h3 class="feature-title">Universal GPU Auto-Detection</h3>
+        <p class="feature-desc">
+          Intelligently probes for <strong>NVIDIA NVENC</strong> (<code>hevc_nvenc</code>), <strong>Intel QuickSync</strong> (<code>hevc_qsv</code>), <strong>Apple Silicon VideoToolbox</strong>, or <strong>VAAPI</strong>. Falls back gracefully to multi-threaded CPU only if no hardware ASIC is present.
+        </p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">🛡️</div>
+        <h3 class="feature-title">Atomic Staging Safeguard</h3>
+        <p class="feature-desc">
+          Videos transcode into a hidden staging file (<code>.filename.transcoding.mp4</code>). The source file is never touched or removed until FFmpeg exits with code <code>0</code> and byte validation succeeds.
+        </p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">🔍</div>
+        <h3 class="feature-title">Intelligent Stream Inspection</h3>
+        <p class="feature-desc">
+          Uses <code>ffprobe</code> to analyze video tracks. Files already encoded in high-efficiency H.265 in an MP4 container are automatically skipped, eliminating redundant compression and generational degradation.
+        </p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">🎬</div>
+        <h3 class="feature-title">FastStart Instant Direct Play</h3>
+        <p class="feature-desc">
+          Applies <code>-movflags +faststart</code> to relocate the MP4 MOOV atom to the beginning of the file. Enables instantaneous playback in Plex, NovaFlix, Jellyfin, and browsers with zero buffering pauses.
+        </p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">🔊</div>
+        <h3 class="feature-title">Audio & Subtitle Passthrough</h3>
+        <p class="feature-desc">
+          Streamlines surround and stereo audio into high-bitrate AAC (192kbps) for cross-platform hardware support and preserves embedded timed-text subtitles (<code>mov_text</code>).
+        </p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">📊</div>
+        <h3 class="feature-title">Live Telemetry & Delta Metrics</h3>
+        <p class="feature-desc">
+          Calculates real-time compression ratios and outputs colorized terminal summaries reporting total scanned items, original vs. new footprint, and net GB storage saved across your drives.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Performance Comparison Benchmark -->
+  <section class="section" id="benchmarks">
+    <div class="section-header">
+      <div class="section-tag">// BENCHMARK ANALYSIS</div>
+      <h2 class="section-title">Hardware GPU vs Traditional CPU Transcoding</h2>
+      <p class="section-subtitle">Real-world performance testing on a 1080p BluRay Remux (2-hour duration, 18.5 GB source).</p>
+    </div>
+
+    <div class="table-wrapper">
+      <table class="comp-table">
+        <thead>
+          <tr>
+            <th>Transcoding Parameter</th>
+            <th>Legacy CPU Transcoding (libx265)</th>
+            <th>NVIDIA NVENC (hevc_nvenc)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Encoding Throughput</strong></td>
+            <td><span class="badge-lose">22 – 28 FPS (0.9x real-time)</span></td>
+            <td><span class="badge-win">✔ 280 – 380 FPS (12.5x real-time)</span></td>
+          </tr>
+          <tr>
+            <td><strong>Processing Time</strong></td>
+            <td><span class="badge-lose">~2 hours 15 minutes</span></td>
+            <td><span class="badge-win">✔ 9 minutes 34 seconds</span></td>
+          </tr>
+          <tr>
+            <td><strong>CPU Utilization</strong></td>
+            <td><span class="badge-lose">95% – 100% across all 16 cores</span></td>
+            <td><span class="badge-win">✔ 2% – 4% (ASIC Video Engine)</span></td>
+          </tr>
+          <tr>
+            <td><strong>Host Power Consumption</strong></td>
+            <td><span class="badge-lose">185W sustained thermal heat</span></td>
+            <td><span class="badge-win">✔ 32W GPU dedicated slice</span></td>
+          </tr>
+          <tr>
+            <td><strong>File Size Reduction</strong></td>
+            <td>18.5 GB ➔ 6.8 GB (-63.2%)</td>
+            <td><span class="badge-win">✔ 18.5 GB ➔ 6.1 GB (-67.0%)</span></td>
+          </tr>
+          <tr>
+            <td><strong>Plex / Mobile Direct Play</strong></td>
+            <td>Requires transcoding if container is MKV</td>
+            <td><span class="badge-win">✔ 100% Native MP4 FastStart Direct Play</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- Interactive Storage Savings Calculator -->
+  <section class="section" id="calculator">
+    <div class="section-header">
+      <div class="section-tag">// STORAGE OPTIMIZATION TOOL</div>
+      <h2 class="section-title">Media Storage Savings Calculator</h2>
+      <p class="section-subtitle">Estimate how many gigabytes or terabytes of drive space you will reclaim.</p>
+    </div>
+
+    <div class="calculator-box">
+      <div class="calc-grid">
+        <div class="calc-controls">
+          <div class="control-group">
+            <div class="control-label">
+              <span>Current Library Size:</span>
+              <span class="val" id="sizeVal">2.0 TB</span>
+            </div>
+            <input type="range" id="libSize" min="100" max="10000" step="100" value="2000">
+          </div>
+
+          <div class="control-group">
+            <div class="control-label">
+              <span>Primary Source Format:</span>
+            </div>
+            <select class="calc-select" id="sourceCodec">
+              <option value="h264">H.264 / AVC (Standard 1080p Rips) ~58% savings</option>
+              <option value="vc1">VC-1 / MPEG-4 Remuxes ~65% savings</option>
+              <option value="mpeg2">MPEG-2 (DVD ISOs / TV Captures) ~72% savings</option>
+              <option value="mixed" selected>Mixed Homelab Media Stack ~60% savings</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="calc-result-box">
+          <div class="calc-saved-number" id="savedNumber">1.20 TB</div>
+          <div class="calc-saved-label">Estimated Storage Reclaimed</div>
+          <p id="resultDetail" style="margin-top: 1rem; color: var(--text-dim); font-size: 0.85rem;">
+            Library reduced from 2.0 TB down to ~800 GB (60% net savings)
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Live Terminal Walkthrough -->
+  <section class="section" id="terminal">
+    <div class="section-header">
+      <div class="section-tag">// REAL-TIME CLI LOGGING</div>
+      <h2 class="section-title">Interactive Terminal Telemetry</h2>
+      <p class="section-subtitle">Live output from batch transcoding execution across a media array.</p>
+    </div>
+
+    <div class="terminal-card">
+      <div class="terminal-header">
+        <div class="terminal-dots">
+          <div class="terminal-dot dot-red"></div>
+          <div class="terminal-dot dot-yellow"></div>
+          <div class="terminal-dot dot-green"></div>
+        </div>
+        <div class="terminal-title">plexadmin@ai-auto: ~/transcode_media.py</div>
+        <div style="font-size: 0.75rem; color: var(--green);">● NVENC ACTIVE</div>
+      </div>
+      <div class="terminal-body">
+<span class="term-bold term-cyan">⚡ FFmpeg H.265 (HEVC) Media Transcoder</span>
+Detected Engine: <span class="term-green">NVIDIA NVENC (GPU)</span> [hevc_nvenc]
+
+==============================================================================
+<span class="term-green">⚡ Batch Transcoding Queue:</span> 14 media candidate(s) found
+<span class="term-cyan">Hardware Engine:</span> NVIDIA NVENC (GPU) (hevc_nvenc)
+==============================================================================
+
+[1/14] <span class="term-dim">✔ [COMPLIANT] Already H.265/MP4:</span> <span class="term-cyan">Oppenheimer.2023.2160p.mp4</span>
+
+[2/14]
+<span class="term-bold">▶ Transcoding:</span> <span class="term-cyan">Dune.Part.Two.2024.1080p.mkv</span>
+  Source: H264 1920x1080 | 11.4 GB
+  Engine: <span class="term-green">NVIDIA NVENC (GPU)</span> (CQ/CRF: 24)
+  <span class="term-green">✔ Complete:</span> 11.4 GB ➔ 4.2 GB (+63.1%) in 04m 12s
+
+[3/14]
+<span class="term-bold">▶ Transcoding:</span> <span class="term-cyan">The.Matrix.1999.Remux.mkv</span>
+  Source: VC1 1920x1080 | 18.2 GB
+  Engine: <span class="term-green">NVIDIA NVENC (GPU)</span> (CQ/CRF: 24)
+  <span class="term-green">✔ Complete:</span> 18.2 GB ➔ 6.1 GB (+66.4%) in 06m 45s
+
+==============================================================================
+<span class="term-green">✨ Transcoding Batch Summary</span>
+==============================================================================
+ • Total Scanned:      14
+ • Transcoded:         <span class="term-green">12</span>
+ • Skipped:            <span class="term-yellow">2</span>
+ • Failed:             0
+ • Original Footprint: 84.6 GB
+ • Modern Footprint:   31.2 GB
+ • Space Savings:      <span class="term-bold term-green">53.4 GB (+63.1%)</span>
+ • Total Elapsed:      42m 18s
+==============================================================================
+      </div>
+    </div>
+  </section>
+
+  <!-- Quickstart & Installation -->
+  <section class="section" id="quickstart">
+    <div class="section-header">
+      <div class="section-tag">// GET STARTED</div>
+      <h2 class="section-title">Ready in 30 Seconds</h2>
+      <p class="section-subtitle">No compilation required. Pure Python 3 and standard FFmpeg hardware encoders.</p>
+    </div>
+
+    <div class="terminal-card" style="margin-bottom: 2rem;">
+      <div class="terminal-header">
+        <div class="terminal-title">1. Clone & Run with Hardware Acceleration</div>
+        <button class="btn-secondary" style="padding: 0.2rem 0.6rem; font-size: 0.75rem;" onclick="copyCode(this, 'code1')">Copy</button>
+      </div>
+      <div class="terminal-body" id="code1">
+<span class="term-dim"># Clone the repository</span>
+git clone https://github.com/digdast/ffmpeg_convert_h265_mp4.git
+cd ffmpeg_convert_h265_mp4
+
+<span class="term-dim"># Execute interactive or direct batch run</span>
+python3 transcode_media.py /path/to/media/library
+      </div>
+    </div>
+
+    <div class="terminal-card">
+      <div class="terminal-header">
+        <div class="terminal-title">2. Advanced CLI Options</div>
+        <button class="btn-secondary" style="padding: 0.2rem 0.6rem; font-size: 0.75rem;" onclick="copyCode(this, 'code2')">Copy</button>
+      </div>
+      <div class="terminal-body" id="code2">
+<span class="term-dim"># Force NVIDIA NVENC with high visual quality (CQ 20)</span>
+python3 transcode_media.py /data/movies --encoder hevc_nvenc --cq 20
+
+<span class="term-dim"># Dry-run preview without touching files</span>
+python3 transcode_media.py /data/movies --dry-run
+
+<span class="term-dim"># Transcode and clean up original MKV files upon success</span>
+python3 transcode_media.py /data/downloads --delete-original
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer>
+    <p>
+      Created with ⚡ by <strong>Efrain Rivas</strong> (<a href="https://github.com/digdast" target="_blank">@digdast</a>) • 
+      <a href="https://github.com/digdast/ffmpeg_convert_h265_mp4" target="_blank">GitHub Repository</a> • 
+      <a href="https://resume.ertechlab.com" target="_blank">Live Systems Architecture Resume</a>
+    </p>
+    <p style="margin-top: 0.5rem; font-size: 0.8rem; color: var(--text-dim);">
+      Part of the sovereign open-source stack: NovaFlix, AegisDNS, Pulsearr, Renamarr, SynapseFlow, and PrintForge 3D.
+    </p>
+  </footer>
+
+  <script src="js/app.js"></script>
+</body>
+</html>

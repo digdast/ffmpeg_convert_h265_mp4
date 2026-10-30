@@ -201,6 +201,31 @@ Hardware Engine: NVIDIA NVENC (GPU) (hevc_nvenc)
 
 ---
 
+## 🌐 Web Showcase Portal & K3s Kubernetes Cluster
+
+This project includes a modern glassmorphic web portal and high-availability Kubernetes manifests deployed on the homelab K3s cluster:
+
+- **Live Endpoints**:
+  - Internal Cluster DNS: `http://ffmpeg.ertech.home`
+  - Homelab Edge / Cloudflare / NPM: `https://ffmpeg.ertechlab.com`
+  - NodePort Gateway: `http://192.168.0.81:30095`
+- **Features in Portal**:
+  - Interactive **Storage Savings Calculator** (model your library size and projected ROI)
+  - Live **Benchmark Comparisons** (NVENC vs QSV vs VideoToolbox vs CPU)
+  - Real-time **CLI Telemetry Simulation**
+  - **1-Click Command Copying** for common transcoding workflows
+- **Kubernetes Architecture**:
+  - Multi-replica Nginx Alpine deployment (`tools` namespace)
+  - Resilient shared NFS cluster storage (`/data/appdata/ffmpeg-website/html`)
+  - Traefik ingress controller & Nginx Proxy Manager edge routing with wildcard SSL
+
+Deploy to your own Kubernetes cluster in one step:
+```bash
+kubectl apply -f k8s/k8s-manifest.yaml
+```
+
+---
+
 ## 👤 Author & Open Source Portfolio
 
 Crafted with ⚡ by **Efrain Rivas** ([@digdast](https://github.com/digdast)):
