@@ -32,6 +32,15 @@ function updateCalculator() {
   resultDetail.textContent = `Library reduced from ${sizeVal.textContent} down to ~${newDisplay} (${Math.round(factor * 100)}% net savings)`;
 }
 
+// Preset Size Selector Helper
+function setLibSize(gb) {
+  const sizeInput = document.getElementById('libSize');
+  if (sizeInput) {
+    sizeInput.value = gb;
+    updateCalculator();
+  }
+}
+
 // Copy Code Button Helper
 function copyCode(btn, codeId) {
   const el = document.getElementById(codeId);

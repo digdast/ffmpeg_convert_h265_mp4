@@ -170,3 +170,4 @@ echo -e "  ${CYAN}transcode-media --help${NC}"
 echo -e "\n${BOLD}Example Transcode Command:${NC}"
 echo -e "  ${CYAN}transcode-media /path/to/media --dry-run${NC}"
 echo -e "  ${CYAN}transcode-media /path/to/media --cq 24 --delete-original${NC}\n"
+

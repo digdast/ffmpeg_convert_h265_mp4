@@ -390,6 +390,24 @@ input[type="range"] {
   cursor: pointer;
 }
 
+.preset-chip {
+  background: rgba(56, 189, 248, 0.08);
+  border: 1px solid rgba(56, 189, 248, 0.22);
+  color: var(--cyan);
+  padding: 0.25rem 0.65rem;
+  border-radius: 6px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.preset-chip:hover {
+  background: var(--cyan);
+  color: #060913;
+  box-shadow: 0 0 10px var(--cyan-glow);
+}
+
 select.calc-select {
   background: #060913;
   border: 1px solid var(--border);

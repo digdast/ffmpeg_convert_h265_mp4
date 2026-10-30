@@ -221,9 +221,17 @@
           <div class="control-group">
             <div class="control-label">
               <span>Current Library Size:</span>
-              <span class="val" id="sizeVal">2.0 TB</span>
+              <span class="val" id="sizeVal">10.0 TB</span>
             </div>
-            <input type="range" id="libSize" min="100" max="10000" step="100" value="2000">
+            <input type="range" id="libSize" min="100" max="100000" step="250" value="10000">
+            <div class="calc-presets" style="display: flex; gap: 0.45rem; flex-wrap: wrap; margin-top: 0.65rem;">
+              <button type="button" class="preset-chip" onclick="setLibSize(1000)">1 TB</button>
+              <button type="button" class="preset-chip" onclick="setLibSize(5000)">5 TB</button>
+              <button type="button" class="preset-chip" onclick="setLibSize(10000)">10 TB</button>
+              <button type="button" class="preset-chip" onclick="setLibSize(25000)">25 TB</button>
+              <button type="button" class="preset-chip" onclick="setLibSize(50000)">50 TB</button>
+              <button type="button" class="preset-chip" onclick="setLibSize(100000)">100 TB</button>
+            </div>
           </div>
 
           <div class="control-group">

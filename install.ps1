@@ -136,3 +136,4 @@ Write-Host "`nExample Transcoding:" -ForegroundColor Yellow
 Write-Host '  transcode-media "D:\Movies" --dry-run' -ForegroundColor Cyan
 Write-Host '  transcode-media "D:\Movies" --cq 24 --delete-original' -ForegroundColor Cyan
 Write-Host ""
+
