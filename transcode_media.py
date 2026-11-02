@@ -201,6 +201,7 @@ class Transcoder:
         self.delete_original = delete_original
         self.skip_hevc = skip_hevc
         self.dry_run = dry_run
+        self.current_temp_output = None
 
         self.stats = {
             "scanned": 0,
@@ -212,25 +213,25 @@ class Transcoder:
             "start_time": time.time()
         }
 
-    def build_ffmpeg_command(self, input_path: str, output_path: str) -> List[str]:
+    def build_ffmpeg_command(self, input_path: str, output_path: str, force_cpu: bool = False) -> List[str]:
         """Construct the optimized FFmpeg CLI argument list."""
         cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-stats"]
+        encoder = "libx265" if force_cpu else self.encoder
 
         # Hardware-specific input/output flags
-        if self.encoder == "hevc_nvenc":
+        if encoder == "hevc_nvenc":
             # NVIDIA NVENC GPU Pipeline
+            # Decodes on CPU and encodes on dedicated NVENC hardware silicon.
+            # Avoids CUVID CUDA_ERROR_OUT_OF_MEMORY crashes when VRAM is tight or shared with LLMs/GUI.
             cmd.extend([
-                "-hwaccel", "cuda",
-                "-hwaccel_output_format", "cuda",
                 "-i", input_path,
                 "-c:v", "hevc_nvenc",
                 "-preset", self.preset if self.preset in ["p1", "p2", "p3", "p4", "p5", "p6", "p7", "slow", "medium", "fast"] else "p4",
                 "-cq:v", str(self.cq),
                 "-b:v", "0",
-                "-spatial_aq", "1",
-                "-temporal_aq", "1"
+                "-spatial_aq", "1"
             ])
-        elif self.encoder == "hevc_qsv":
+        elif encoder == "hevc_qsv":
             # Intel QuickSync
             cmd.extend([
                 "-hwaccel", "qsv",
@@ -239,7 +240,7 @@ class Transcoder:
                 "-global_quality", str(self.cq),
                 "-preset", "medium"
             ])
-        elif self.encoder == "hevc_vaapi":
+        elif encoder == "hevc_vaapi":
             # VAAPI
             cmd.extend([
                 "-hwaccel", "vaapi",
@@ -249,14 +250,14 @@ class Transcoder:
                 "-c:v", "hevc_vaapi",
                 "-qp", str(self.cq)
             ])
-        elif self.encoder == "hevc_videotoolbox":
+        elif encoder == "hevc_videotoolbox":
             # Apple Silicon VideoToolbox
             cmd.extend([
                 "-i", input_path,
                 "-c:v", "hevc_videotoolbox",
                 "-q:v", str(max(20, 100 - self.cq * 2))
             ])
-        elif self.encoder == "libx265":
+        elif encoder == "libx265":
             # Software CPU HEVC
             cmd.extend([
                 "-i", input_path,
@@ -268,7 +269,7 @@ class Transcoder:
             # CPU Fallback
             cmd.extend([
                 "-i", input_path,
-                "-c:v", self.encoder,
+                "-c:v", encoder,
                 "-crf", str(self.cq)
             ])
 
