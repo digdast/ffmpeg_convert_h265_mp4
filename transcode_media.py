@@ -411,6 +411,9 @@ class Transcoder:
             "transcoded": 0,
             "skipped": 0,
             "failed": 0,
+            "total_candidates": 0,
+            "transcoded_orig_bytes": 0,
+            "transcoded_new_bytes": 0,
             "orig_bytes": 0,
             "new_bytes": 0,
             "start_time": time.time()
@@ -534,12 +537,16 @@ class Transcoder:
 
         if self.dry_run:
             print(f"  {Colors.YELLOW}[DRY RUN] Would execute command and convert to {final_output}{Colors.RESET}")
+            est_new_size = int(orig_size * 0.45)
             self.stats["transcoded"] += 1
-            self.stats["new_bytes"] += int(orig_size * 0.55)
+            self.stats["transcoded_orig_bytes"] += orig_size
+            self.stats["transcoded_new_bytes"] += est_new_size
+            self.stats["new_bytes"] += est_new_size
             return True
 
         # Build execution command
         cmd = self.build_ffmpeg_command(file_path, temp_output)
+        self.current_temp_output = temp_output
 
         t_start = time.time()
         try:
@@ -553,6 +560,8 @@ class Transcoder:
             new_size = os.path.getsize(temp_output)
             self.stats["new_bytes"] += new_size
             self.stats["transcoded"] += 1
+            self.stats["transcoded_orig_bytes"] += orig_size
+            self.stats["transcoded_new_bytes"] += new_size
 
             saved_bytes = orig_size - new_size
             ratio_pct = (saved_bytes / orig_size) * 100.0 if orig_size > 0 else 0
@@ -562,6 +571,7 @@ class Transcoder:
                 # Transcoding in-place: remove original first, then rename temp
                 os.remove(file_path)
             shutil.move(temp_output, final_output)
+            self.current_temp_output = None
 
             # Delete original if input was .mkv, .avi, etc. and flag is set
             if self.delete_original and file_path != final_output:
@@ -595,6 +605,8 @@ class Transcoder:
                     new_size = os.path.getsize(temp_output)
                     self.stats["new_bytes"] += new_size
                     self.stats["transcoded"] += 1
+                    self.stats["transcoded_orig_bytes"] += orig_size
+                    self.stats["transcoded_new_bytes"] += new_size
 
                     saved_bytes = orig_size - new_size
                     ratio_pct = (saved_bytes / orig_size) * 100.0 if orig_size > 0 else 0
@@ -602,6 +614,7 @@ class Transcoder:
                     if file_path == final_output:
                         os.remove(file_path)
                     shutil.move(temp_output, final_output)
+                    self.current_temp_output = None
 
                     if self.delete_original and file_path != final_output:
                         try:
@@ -618,6 +631,7 @@ class Transcoder:
             print(f"  {Colors.RED}✖ Error during transcoding: exit code {e.returncode}{Colors.RESET}")
             if os.path.exists(temp_output):
                 os.remove(temp_output)
+            self.current_temp_output = None
             self.stats["failed"] += 1
             self.stats["new_bytes"] += orig_size
             return False
@@ -625,6 +639,7 @@ class Transcoder:
             print(f"  {Colors.RED}✖ Unexpected failure: {e}{Colors.RESET}")
             if os.path.exists(temp_output):
                 os.remove(temp_output)
+            self.current_temp_output = None
             self.stats["failed"] += 1
             self.stats["new_bytes"] += orig_size
             return False
@@ -641,35 +656,76 @@ class Transcoder:
 
         target_files.sort()
         total = len(target_files)
+        self.stats["total_candidates"] = total
 
         print(f"\n{Colors.BOLD}{'=' * 78}{Colors.RESET}")
         print(f" {Colors.GREEN}⚡ Batch Transcoding Queue:{Colors.RESET} {total} media candidate(s) found")
         print(f" {Colors.CYAN}Hardware Engine:{Colors.RESET} {self.hw_desc} ({self.encoder})")
         print(f"{Colors.BOLD}{'=' * 78}{Colors.RESET}")
 
-        for idx, f in enumerate(target_files, 1):
-            print(f"\n[{idx}/{total}]", end="")
-            self.transcode_file(f)
+        interrupted = False
+        try:
+            for idx, f in enumerate(target_files, 1):
+                print(f"\n[{idx}/{total}]", end="")
+                self.transcode_file(f)
+        except KeyboardInterrupt:
+            interrupted = True
+            print(f"\n\n{Colors.YELLOW}{Colors.BOLD}⚠ Transcoding canceled by user (Ctrl+C / Interrupt).{Colors.RESET}")
+            if self.current_temp_output and os.path.exists(self.current_temp_output):
+                try:
+                    os.remove(self.current_temp_output)
+                    print(f" {Colors.DIM}✔ Cleaned up incomplete temp file: {os.path.basename(self.current_temp_output)}{Colors.RESET}")
+                except Exception:
+                    pass
+        finally:
+            self.print_summary(interrupted=interrupted)
 
-        self.print_summary()
+    def print_summary(self, interrupted: bool = False):
+        """Display final execution telemetry and comprehensive space saved."""
+        total_time = max(0.1, time.time() - self.stats["start_time"])
+        orig_bytes = self.stats["transcoded_orig_bytes"]
+        new_bytes = self.stats["transcoded_new_bytes"]
+        saved_bytes = max(0, orig_bytes - new_bytes)
+        pct_saved = (saved_bytes / orig_bytes * 100.0) if orig_bytes > 0 else 0.0
 
-    def print_summary(self):
-        """Display final execution telemetry."""
-        total_time = time.time() - self.stats["start_time"]
-        saved = self.stats["orig_bytes"] - self.stats["new_bytes"]
-        pct = (saved / self.stats["orig_bytes"] * 100) if self.stats["orig_bytes"] > 0 else 0
+        banner_title = "⚠ Transcoding Canceled (Partial Batch Summary)" if interrupted else "✨ Transcoding Batch Summary"
+        banner_color = Colors.YELLOW if interrupted else Colors.GREEN
 
         print(f"\n{Colors.BOLD}{'=' * 78}{Colors.RESET}")
-        print(f" {Colors.GREEN}✨ Transcoding Batch Summary{Colors.RESET}")
+        print(f" {banner_color}{Colors.BOLD}{banner_title}{Colors.RESET}")
         print(f"{Colors.BOLD}{'=' * 78}{Colors.RESET}")
-        print(f" • Total Scanned:     {self.stats['scanned']}")
-        print(f" • Transcoded:        {Colors.GREEN}{self.stats['transcoded']}{Colors.RESET}")
-        print(f" • Skipped:           {Colors.YELLOW}{self.stats['skipped']}{Colors.RESET}")
-        print(f" • Failed:            {Colors.RED}{self.stats['failed']}{Colors.RESET}")
-        print(f" • Original Footprint:{format_bytes(self.stats['orig_bytes'])}")
-        print(f" • Modern Footprint:  {format_bytes(self.stats['new_bytes'])}")
-        print(f" • Space Savings:     {Colors.BOLD}{Colors.GREEN}{format_bytes(saved)} ({pct:+.1f}%){Colors.RESET}")
-        print(f" • Total Elapsed:     {format_duration(total_time)}")
+        
+        # File counters
+        total_cand = self.stats["total_candidates"] if self.stats["total_candidates"] > 0 else self.stats["scanned"]
+        print(f" • Total Candidates:       {total_cand}")
+        print(f" • Successfully Converted: {Colors.GREEN}{Colors.BOLD}{self.stats['transcoded']}{Colors.RESET}")
+        print(f" • Skipped (Compliant):    {Colors.YELLOW}{self.stats['skipped']}{Colors.RESET}")
+        if self.stats["failed"] > 0:
+            print(f" • Failed:                 {Colors.RED}{self.stats['failed']}{Colors.RESET}")
+        if interrupted:
+            remaining = max(0, total_cand - self.stats["transcoded"] - self.stats["skipped"] - self.stats["failed"])
+            print(f" • Unprocessed Remaining:  {Colors.DIM}{remaining}{Colors.RESET}")
+
+        print(f"\n {Colors.BOLD}📦 Storage Footprint & Net Space Reclaimed:{Colors.RESET}")
+        print(f" • Converted Original Footprint: {format_bytes(orig_bytes)}")
+        print(f" • Modern H.265 Space Occupied:  {format_bytes(new_bytes)}")
+
+        if saved_bytes > 0:
+            saved_gb = saved_bytes / (1024 ** 3)
+            print(f" • {Colors.BOLD}Net Storage Space Saved:       {Colors.GREEN}{Colors.BOLD}✔ {format_bytes(saved_bytes)} ({saved_gb:.2f} GB) SAVED (-{pct_saved:.1f}%){Colors.RESET}")
+            if self.stats["transcoded"] > 0:
+                avg_saved = saved_bytes / self.stats["transcoded"]
+                print(f" • Average Space Saved / Video:  {Colors.CYAN}{format_bytes(avg_saved)} / media file{Colors.RESET}")
+        else:
+            if self.stats["transcoded"] == 0:
+                print(f" • Net Storage Space Saved:       {Colors.DIM}0 B (no transcodes completed yet){Colors.RESET}")
+            else:
+                print(f" • Net Storage Space Saved:       {Colors.DIM}0 B (already optimal){Colors.RESET}")
+
+        print(f"\n • Elapsed Runtime:              {format_duration(total_time)}")
+        if self.stats["transcoded"] > 0:
+            throughput = orig_bytes / total_time
+            print(f" • Throughput Efficiency:        {Colors.BOLD}{format_bytes(throughput)}/s{Colors.RESET}")
         print(f"{Colors.BOLD}{'=' * 78}{Colors.RESET}\n")
 
 
@@ -771,14 +827,25 @@ def main():
         dry_run=args.dry_run
     )
 
-    if os.path.isfile(target_path):
-        transcoder.transcode_file(target_path)
-        transcoder.print_summary()
-    elif os.path.isdir(target_path):
-        transcoder.scan_and_transcode(target_path)
-    else:
-        print(f"{Colors.RED}Invalid path specified.{Colors.RESET}")
-        sys.exit(1)
+    try:
+        if os.path.isfile(target_path):
+            transcoder.stats["total_candidates"] = 1
+            transcoder.transcode_file(target_path)
+            transcoder.print_summary()
+        elif os.path.isdir(target_path):
+            transcoder.scan_and_transcode(target_path)
+        else:
+            print(f"{Colors.RED}Invalid path specified.{Colors.RESET}")
+            sys.exit(1)
+    except KeyboardInterrupt:
+        print(f"\n\n{Colors.YELLOW}{Colors.BOLD}⚠ Transcoding canceled by user (Ctrl+C / Interrupt).{Colors.RESET}")
+        if transcoder.current_temp_output and os.path.exists(transcoder.current_temp_output):
+            try:
+                os.remove(transcoder.current_temp_output)
+                print(f" {Colors.DIM}✔ Cleaned up incomplete temp file: {os.path.basename(transcoder.current_temp_output)}{Colors.RESET}")
+            except Exception:
+                pass
+        transcoder.print_summary(interrupted=True)
 
 
 if __name__ == "__main__":
