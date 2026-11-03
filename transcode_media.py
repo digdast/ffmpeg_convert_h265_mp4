@@ -72,7 +72,7 @@ def format_duration(seconds: float) -> str:
 
 
 class HardwareDetector:
-    """Detects available hardware accelerators and encoders."""
+    """Detects available hardware accelerators, GPUs (Intel iGPU, Intel Arc, NVIDIA, AMD, Apple), and encoders."""
 
     @staticmethod
     def get_available_encoders() -> List[str]:
@@ -93,33 +93,234 @@ class HardwareDetector:
         except Exception:
             return []
 
-    @classmethod
-    def detect_best_encoder(cls, preferred: Optional[str] = None) -> Tuple[str, str]:
+    @staticmethod
+    def get_drm_devices() -> List[Dict]:
         """
-        Detect best HEVC encoder available on this system.
-        Returns: (encoder_name, hardware_type)
+        Scan /sys/class/drm and /dev/dri for DRM render nodes.
+        Identifies Intel Arc discrete GPUs, Intel iGPUs, NVIDIA, and AMD.
+        """
+        devices = []
+        dri_dir = "/dev/dri"
+        if not os.path.exists(dri_dir):
+            return devices
+
+        # Get lspci info if available for hardware naming
+        pci_map = {}
+        try:
+            res = subprocess.run(["lspci", "-nn"], capture_output=True, text=True)
+            for line in res.stdout.splitlines():
+                parts = line.strip().split(maxsplit=1)
+                if len(parts) >= 2:
+                    pci_slot = parts[0]
+                    desc = parts[1]
+                    if any(kw in desc.lower() for kw in ["vga", "3d", "display"]):
+                        pci_map[pci_slot] = desc
+        except Exception:
+            pass
+
+        # Intel Arc DG2 / Alchemist PCI Device IDs (vendor 8086)
+        INTEL_ARC_IDS = {
+            "5690", "5691", "5692", "5693", "5694", "5695",
+            "56a0", "56a1", "56a2", "56a3", "56a4", "56a5", "56a6",
+            "56b0", "56b1", "56b2", "56b3", "56c0", "56c1"
+        }
+
+        for entry in sorted(os.listdir(dri_dir)):
+            if not entry.startswith("renderD"):
+                continue
+
+            node_path = os.path.join(dri_dir, entry)
+            dev_vendor_path = f"/sys/class/drm/{entry}/device/vendor"
+            dev_device_path = f"/sys/class/drm/{entry}/device/device"
+
+            vendor_id = ""
+            device_id = ""
+            if os.path.exists(dev_vendor_path):
+                try:
+                    with open(dev_vendor_path, "r") as f:
+                        vendor_id = f.read().strip().lower().replace("0x", "")
+                except Exception:
+                    pass
+
+            if os.path.exists(dev_device_path):
+                try:
+                    with open(dev_device_path, "r") as f:
+                        device_id = f.read().strip().lower().replace("0x", "")
+                except Exception:
+                    pass
+
+            gpu_type = "unknown"
+            label = f"DRM Node {entry}"
+            is_intel_arc = False
+            is_intel_igpu = False
+
+            # Check matching lspci line
+            pci_desc = ""
+            try:
+                device_link = os.readlink(f"/sys/class/drm/{entry}/device")
+                pci_addr = os.path.basename(device_link)
+                short_pci = pci_addr.split(":")[-2] + ":" + pci_addr.split(":")[-1] if ":" in pci_addr else pci_addr
+                pci_desc = pci_map.get(short_pci, "")
+            except Exception:
+                pass
+
+            if vendor_id == "8086":  # Intel
+                if (device_id in INTEL_ARC_IDS or 
+                    device_id.startswith("e2") or  # Intel Battlemage (BMG)
+                    "arc" in pci_desc.lower() or 
+                    "dg2" in pci_desc.lower() or
+                    "alchemist" in pci_desc.lower() or
+                    "battlemage" in pci_desc.lower()):
+                    gpu_type = "intel_arc"
+                    is_intel_arc = True
+                    arc_name = pci_desc.split(': ')[-1] if ': ' in pci_desc else entry
+                    label = f"Intel Arc GPU ({arc_name})"
+                else:
+                    gpu_type = "intel_igpu"
+                    is_intel_igpu = True
+                    igpu_name = pci_desc.split(': ')[-1] if ': ' in pci_desc else "UHD/Iris Xe"
+                    label = f"Intel iGPU ({igpu_name})"
+            elif vendor_id == "10de":  # NVIDIA
+                gpu_type = "nvidia"
+                nv_name = pci_desc.split(': ')[-1] if ': ' in pci_desc else entry
+                label = f"NVIDIA GPU ({nv_name})"
+            elif vendor_id == "1002":  # AMD
+                gpu_type = "amd"
+                amd_name = pci_desc.split(': ')[-1] if ': ' in pci_desc else entry
+                label = f"AMD Radeon ({amd_name})"
+
+            devices.append({
+                "node": node_path,
+                "entry": entry,
+                "vendor_id": vendor_id,
+                "device_id": device_id,
+                "gpu_type": gpu_type,
+                "label": label,
+                "is_intel_arc": is_intel_arc,
+                "is_intel_igpu": is_intel_igpu,
+                "pci_desc": pci_desc
+            })
+
+        return devices
+
+    @staticmethod
+    def test_encoder(encoder: str, device: Optional[str] = None) -> bool:
+        """
+        Verify if an encoder actually functions with current drivers/hardware.
+        Runs a 1-frame test encoding pipeline with lavfi synthetic color source.
+        """
+        if encoder in ("libx265", "libx264"):
+            return True
+        try:
+            cmd = ["ffmpeg", "-v", "error"]
+            if encoder == "hevc_vaapi":
+                vaapi_dev = device or "/dev/dri/renderD128"
+                if not os.path.exists(vaapi_dev):
+                    return False
+                cmd.extend([
+                    "-vaapi_device", vaapi_dev,
+                    "-f", "lavfi", "-i", "color=s=64x64:d=0.04",
+                    "-vf", "format=nv12,hwupload",
+                    "-c:v", "hevc_vaapi",
+                    "-f", "null", "-"
+                ])
+            elif encoder == "hevc_qsv":
+                if device:
+                    cmd.extend(["-qsv_device", device])
+                cmd.extend([
+                    "-f", "lavfi", "-i", "color=s=64x64:d=0.04",
+                    "-c:v", "hevc_qsv",
+                    "-f", "null", "-"
+                ])
+            else:
+                cmd.extend([
+                    "-f", "lavfi", "-i", "color=s=64x64:d=0.04",
+                    "-c:v", encoder,
+                    "-f", "null", "-"
+                ])
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            return res.returncode == 0
+        except Exception:
+            return False
+
+    @classmethod
+    def detect_best_encoder(
+        cls,
+        preferred_encoder: Optional[str] = None,
+        preferred_device: Optional[str] = None
+    ) -> Tuple[str, str, Optional[str]]:
+        """
+        Auto-detect best HEVC hardware/CPU encoder and device node.
+        Supports Intel Arc, Intel iGPU, NVIDIA NVENC, Apple VideoToolbox, VAAPI, CPU.
+        Returns: (encoder_name, description, device_node)
         """
         encoders = cls.get_available_encoders()
+        drm_devices = cls.get_drm_devices()
 
-        if preferred and preferred in encoders:
-            return preferred, "user-specified"
+        # Handle user-specified encoder
+        if preferred_encoder and preferred_encoder in encoders:
+            if preferred_encoder not in ("libx265", "libx264") and not cls.test_encoder(preferred_encoder, preferred_device):
+                print(f" {Colors.YELLOW}⚠ Warning: Specified encoder '{preferred_encoder}' failed hardware initialization test.{Colors.RESET}")
+                print(f"   Falling back to automatic hardware auto-detection...")
+            else:
+                dev_node = preferred_device
+                if not dev_node and preferred_encoder in ("hevc_qsv", "hevc_vaapi") and drm_devices:
+                    dev_node = drm_devices[0]["node"]
+                return preferred_encoder, f"User-Specified ({preferred_encoder})", dev_node
 
-        # Hardware encoder priority ranking
-        hw_candidates = [
-            ("hevc_nvenc", "NVIDIA NVENC (GPU)"),
-            ("hevc_qsv", "Intel QuickSync (GPU)"),
-            ("hevc_videotoolbox", "Apple VideoToolbox (Apple Silicon / GPU)"),
-            ("hevc_vaapi", "Linux VAAPI (GPU)"),
-            ("hevc_amf", "AMD AMF (GPU)"),
-            ("libx265", "Software CPU (libx265)"),
-            ("libx264", "Software CPU Fallback (libx264)")
-        ]
+        # 1. Check for Intel Arc dGPU (Highest priority for Intel QuickSync/Arc)
+        arc_gpus = [d for d in drm_devices if d["is_intel_arc"]]
+        for arc in arc_gpus:
+            node = arc["node"]
+            # Test QSV on Intel Arc
+            if "hevc_qsv" in encoders and cls.test_encoder("hevc_qsv", node):
+                return "hevc_qsv", f"Intel QuickSync [{arc['label']}]", node
+            # Test VAAPI on Intel Arc
+            if "hevc_vaapi" in encoders and cls.test_encoder("hevc_vaapi", node):
+                return "hevc_vaapi", f"Intel Arc VAAPI [{arc['label']}]", node
 
-        for enc, desc in hw_candidates:
-            if enc in encoders:
-                return enc, desc
+        # 2. Check for Intel iGPU (UHD / Iris Xe)
+        igpu_gpus = [d for d in drm_devices if d["is_intel_igpu"]]
+        for igpu in igpu_gpus:
+            node = igpu["node"]
+            # Test QSV on Intel iGPU
+            if "hevc_qsv" in encoders and cls.test_encoder("hevc_qsv", node):
+                return "hevc_qsv", f"Intel QuickSync iGPU [{igpu['label']}]", node
+            # Test VAAPI on Intel iGPU
+            if "hevc_vaapi" in encoders and cls.test_encoder("hevc_vaapi", node):
+                return "hevc_vaapi", f"Intel iGPU VAAPI [{igpu['label']}]", node
 
-        return "libx264", "Generic Software (libx264)"
+        # 3. Check for NVIDIA NVENC (GPU)
+        if "hevc_nvenc" in encoders and cls.test_encoder("hevc_nvenc"):
+            return "hevc_nvenc", "NVIDIA NVENC (GPU)", None
+
+        # 4. Check for Apple Silicon VideoToolbox
+        if "hevc_videotoolbox" in encoders and cls.test_encoder("hevc_videotoolbox"):
+            return "hevc_videotoolbox", "Apple VideoToolbox (Apple Silicon)", None
+
+        # 5. Check any remaining DRM device via VAAPI (e.g. AMD Radeon or generic Intel)
+        if "hevc_vaapi" in encoders:
+            for d in drm_devices:
+                node = d["node"]
+                if cls.test_encoder("hevc_vaapi", node):
+                    return "hevc_vaapi", f"VAAPI Hardware [{d['label']}]", node
+            if cls.test_encoder("hevc_vaapi", "/dev/dri/renderD128"):
+                return "hevc_vaapi", "Linux VAAPI (/dev/dri/renderD128)", "/dev/dri/renderD128"
+
+        # 6. Check for AMD AMF
+        if "hevc_amf" in encoders and cls.test_encoder("hevc_amf"):
+            return "hevc_amf", "AMD AMF (GPU)", None
+
+        # 7. Check generic QSV without device node
+        if "hevc_qsv" in encoders and cls.test_encoder("hevc_qsv"):
+            return "hevc_qsv", "Intel QuickSync (GPU)", None
+
+        # 8. High-efficiency CPU Fallback (libx265)
+        if "libx265" in encoders:
+            return "libx265", "Software CPU (libx265)", None
+
+        # 9. Baseline CPU Fallback
+        return "libx264", "Software CPU Fallback (libx264)", None
 
 
 class MediaProber:
@@ -182,6 +383,7 @@ class Transcoder:
         self,
         encoder: str,
         hw_desc: str,
+        device: Optional[str] = None,
         cq: int = 24,
         preset: str = "p4",
         audio_codec: str = "aac",
@@ -193,6 +395,7 @@ class Transcoder:
     ):
         self.encoder = encoder
         self.hw_desc = hw_desc
+        self.device = device
         self.cq = cq
         self.preset = preset
         self.audio_codec = audio_codec
@@ -221,8 +424,6 @@ class Transcoder:
         # Hardware-specific input/output flags
         if encoder == "hevc_nvenc":
             # NVIDIA NVENC GPU Pipeline
-            # Decodes on CPU and encodes on dedicated NVENC hardware silicon.
-            # Avoids CUVID CUDA_ERROR_OUT_OF_MEMORY crashes when VRAM is tight or shared with LLMs/GUI.
             cmd.extend([
                 "-i", input_path,
                 "-c:v", "hevc_nvenc",
@@ -232,19 +433,25 @@ class Transcoder:
                 "-spatial_aq", "1"
             ])
         elif encoder == "hevc_qsv":
-            # Intel QuickSync
+            # Intel QuickSync (Intel Arc dGPU & Intel iGPU)
+            qsv_presets = {
+                "p1": "veryfast", "p2": "faster", "p3": "fast",
+                "p4": "medium", "p5": "slow", "p6": "slower", "p7": "veryslow"
+            }
+            qsv_preset = qsv_presets.get(self.preset, self.preset if self.preset in qsv_presets.values() else "medium")
+            if self.device and not force_cpu:
+                cmd.extend(["-qsv_device", self.device])
             cmd.extend([
-                "-hwaccel", "qsv",
                 "-i", input_path,
                 "-c:v", "hevc_qsv",
                 "-global_quality", str(self.cq),
-                "-preset", "medium"
+                "-preset", qsv_preset
             ])
         elif encoder == "hevc_vaapi":
-            # VAAPI
+            # Linux VAAPI (Intel Arc dGPU, Intel iGPU, AMD Radeon)
+            vaapi_dev = self.device if (self.device and not force_cpu) else "/dev/dri/renderD128"
             cmd.extend([
-                "-hwaccel", "vaapi",
-                "-hwaccel_device", "/dev/dri/renderD128",
+                "-vaapi_device", vaapi_dev,
                 "-i", input_path,
                 "-vf", "format=nv12,hwupload",
                 "-c:v", "hevc_vaapi",
@@ -369,6 +576,45 @@ class Transcoder:
             return True
 
         except subprocess.CalledProcessError as e:
+            # If a hardware encoder failed mid-flight, attempt graceful CPU fallback
+            if self.encoder not in ("libx265", "libx264"):
+                print(f"  {Colors.YELLOW}⚠ Hardware encoder '{self.encoder}' failed (exit code {e.returncode}). Retrying with CPU fallback (libx265)...{Colors.RESET}")
+                if os.path.exists(temp_output):
+                    os.remove(temp_output)
+                try:
+                    fallback_cmd = self.build_ffmpeg_command(file_path, temp_output, force_cpu=True)
+                    subprocess.run(fallback_cmd, check=True)
+                    # Automatically downgrade future queue jobs to CPU to avoid re-failing broken hardware
+                    self.encoder = "libx265"
+                    self.hw_desc = "Software CPU Fallback (libx265)"
+                    elapsed = time.time() - t_start
+
+                    if not os.path.exists(temp_output) or os.path.getsize(temp_output) == 0:
+                        raise RuntimeError("Fallback output file was not created or is 0 bytes.")
+
+                    new_size = os.path.getsize(temp_output)
+                    self.stats["new_bytes"] += new_size
+                    self.stats["transcoded"] += 1
+
+                    saved_bytes = orig_size - new_size
+                    ratio_pct = (saved_bytes / orig_size) * 100.0 if orig_size > 0 else 0
+
+                    if file_path == final_output:
+                        os.remove(file_path)
+                    shutil.move(temp_output, final_output)
+
+                    if self.delete_original and file_path != final_output:
+                        try:
+                            os.remove(file_path)
+                        except OSError as ex:
+                            print(f"  {Colors.YELLOW}Warning: Could not remove original: {ex}{Colors.RESET}")
+
+                    color = Colors.GREEN if saved_bytes > 0 else Colors.YELLOW
+                    print(f"  {color}✔ Complete (CPU Fallback):{Colors.RESET} {format_bytes(orig_size)} ➔ {format_bytes(new_size)} ({ratio_pct:+.1f}%) in {format_duration(elapsed)}")
+                    return True
+                except Exception as fallback_err:
+                    print(f"  {Colors.RED}✖ CPU Fallback also failed: {fallback_err}{Colors.RESET}")
+
             print(f"  {Colors.RED}✖ Error during transcoding: exit code {e.returncode}{Colors.RESET}")
             if os.path.exists(temp_output):
                 os.remove(temp_output)
@@ -471,6 +717,11 @@ def parse_arguments():
         help="Re-encode videos that are already H.265 (default: skipped to preserve quality and save time)"
     )
     parser.add_argument(
+        "--device",
+        default=None,
+        help="Explicit DRM render node for Intel Arc / iGPU (e.g. /dev/dri/renderD128, /dev/dri/renderD129; default: auto-detected)"
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Scan and display planned transcode actions without running ffmpeg"
@@ -488,12 +739,13 @@ def main():
         print(f"Please install FFmpeg: sudo apt install -y ffmpeg (Linux) or brew install ffmpeg (macOS)")
         sys.exit(1)
 
-    # Detect hardware acceleration
+    # Detect hardware acceleration and GPU device
     preferred_enc = None if args.encoder == "auto" else args.encoder
-    encoder, hw_desc = HardwareDetector.detect_best_encoder(preferred_enc)
+    encoder, hw_desc, device_node = HardwareDetector.detect_best_encoder(preferred_enc, args.device)
 
     print(f"\n{Colors.BOLD}{Colors.CYAN}⚡ FFmpeg H.265 (HEVC) Media Transcoder{Colors.RESET}")
-    print(f"Detected Engine: {Colors.GREEN}{hw_desc}{Colors.RESET} [{encoder}]")
+    dev_str = f" {Colors.DIM}(Device: {device_node}){Colors.RESET}" if device_node else ""
+    print(f"Auto-Detected Engine: {Colors.GREEN}{hw_desc}{Colors.RESET} [{encoder}]{dev_str}")
 
     # Path acquisition
     target_path = args.path
@@ -510,6 +762,7 @@ def main():
     transcoder = Transcoder(
         encoder=encoder,
         hw_desc=hw_desc,
+        device=device_node,
         cq=args.cq,
         preset=args.preset,
         overwrite=args.overwrite,

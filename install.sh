@@ -84,23 +84,43 @@ fi
 echo -e "\n${YELLOW}[*] Probing Hardware GPU Accelerators...${NC}"
 HW_FOUND=0
 
+# Check Intel Arc & iGPU DRM devices
+if [ -d "/dev/dri" ]; then
+    for node in /dev/dri/renderD*; do
+        [ -e "$node" ] || continue
+        if [ -f "/sys/class/drm/$(basename "$node")/device/vendor" ]; then
+            VENDOR="$(cat "/sys/class/drm/$(basename "$node")/device/vendor" 2>/dev/null || true)"
+            if [ "$VENDOR" = "0x8086" ]; then
+                DEVICE_ID="$(cat "/sys/class/drm/$(basename "$node")/device/device" 2>/dev/null || true)"
+                echo -e "  ${GREEN}✔ Intel GPU detected at ${node}${NC} (Vendor: 8086, DevID: ${DEVICE_ID})"
+                HW_FOUND=1
+            fi
+        fi
+    done
+fi
+
 if command -v ffmpeg >/dev/null 2>&1; then
-    ENCODERS="$(ffmpeg -encoders 2>/dev/null || true)"
-    
-    if echo "$ENCODERS" | grep -q "hevc_nvenc"; then
-        echo -e "  ${GREEN}✔ NVIDIA NVENC (hevc_nvenc):${NC} Supported"
+    # Test functional hardware encoders
+    if ffmpeg -v error -f lavfi -i color=s=64x64:d=0.04 -c:v hevc_nvenc -f null - >/dev/null 2>&1; then
+        echo -e "  ${GREEN}✔ NVIDIA NVENC (hevc_nvenc):${NC} Functional"
+        HW_FOUND=1
+    elif ffmpeg -encoders 2>/dev/null | grep -q "hevc_nvenc"; then
+        echo -e "  ${YELLOW}ℹ NVIDIA NVENC (hevc_nvenc):${NC} In FFmpeg build, but no active CUDA driver/GPU loaded"
+    fi
+
+    if ffmpeg -v error -f lavfi -i color=s=64x64:d=0.04 -c:v hevc_qsv -f null - >/dev/null 2>&1; then
+        echo -e "  ${GREEN}✔ Intel QuickSync (hevc_qsv):${NC} Functional (Intel Arc / iGPU)"
         HW_FOUND=1
     fi
-    if echo "$ENCODERS" | grep -q "hevc_qsv"; then
-        echo -e "  ${GREEN}✔ Intel QuickSync (hevc_qsv):${NC} Supported"
+
+    if ffmpeg -v error -vaapi_device /dev/dri/renderD128 -f lavfi -i color=s=64x64:d=0.04 -vf "format=nv12,hwupload" -c:v hevc_vaapi -f null - >/dev/null 2>&1 || \
+       ffmpeg -v error -f lavfi -i color=s=64x64:d=0.04 -c:v hevc_vaapi -f null - >/dev/null 2>&1; then
+        echo -e "  ${GREEN}✔ Linux VAAPI (hevc_vaapi):${NC} Functional"
         HW_FOUND=1
     fi
-    if echo "$ENCODERS" | grep -q "hevc_videotoolbox"; then
-        echo -e "  ${GREEN}✔ Apple VideoToolbox (hevc_videotoolbox):${NC} Supported"
-        HW_FOUND=1
-    fi
-    if echo "$ENCODERS" | grep -q "hevc_vaapi"; then
-        echo -e "  ${GREEN}✔ Linux VAAPI (hevc_vaapi):${NC} Supported"
+
+    if ffmpeg -v error -f lavfi -i color=s=64x64:d=0.04 -c:v hevc_videotoolbox -f null - >/dev/null 2>&1; then
+        echo -e "  ${GREEN}✔ Apple VideoToolbox (hevc_videotoolbox):${NC} Functional"
         HW_FOUND=1
     fi
 fi
