@@ -155,23 +155,29 @@ Run the script with no arguments to be prompted for a directory or file:
 ### Direct CLI Commands
 
 ```bash
-# 1. Transcode an entire media directory using GPU auto-detection
+# 1. Transcode an entire media directory using auto hardware detection
 python3 transcode_media.py /data/media/movies
 
-# 2. Transcode a single video file
-python3 transcode_media.py /data/media/movies/Avatar.mkv
+# 2. Maximum Throughput: Run DUAL-ENGINE (GPU + CPU simultaneously) for faster batch conversions
+python3 transcode_media.py /data/media/tv --both
 
-# 3. Explicitly force NVIDIA NVENC with high visual quality (CQ 20)
+# 3. Force dedicated GPU hardware transcoding (NVENC, QSV, VideoToolbox, VAAPI)
+python3 transcode_media.py /data/media/movies --gpu
+
+# 4. Force multi-threaded CPU software transcoding (libx265 with all cores)
+python3 transcode_media.py /data/media/movies --cpu --cpu-threads 16
+
+# 5. Customize the Level Progress Bar design (level, blocks, ascii)
+python3 transcode_media.py /data/media/movies --bar-style level
+
+# 6. Explicitly choose encoder and Constant Quality (CQ 20)
 python3 transcode_media.py /data/media/tv --encoder hevc_nvenc --cq 20
 
-# 4. Dry-run mode: scan and preview planned transcoding actions without writing files
+# 7. Dry-run mode: scan and preview planned transcoding actions without writing files
 python3 transcode_media.py /data/media/movies --dry-run
 
-# 5. Automatically delete original .mkv/.avi files after successful transcode
+# 8. Automatically delete original .mkv/.avi files after successful transcode
 python3 transcode_media.py /data/media/downloads --delete-original
-
-# 6. Overwrite existing .mp4 files if re-encoding
-python3 transcode_media.py /data/media/movies --overwrite --re-encode-hevc
 ```
 
 ### CLI Reference
@@ -179,9 +185,18 @@ python3 transcode_media.py /data/media/movies --overwrite --re-encode-hevc
 | Parameter | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `path` | Positional | `None` (Interactive prompt) | Path to target media directory or individual video file. |
-| `--encoder` | Choice | `auto` | Choose `auto`, `hevc_nvenc`, `hevc_qsv`, `hevc_vaapi`, `hevc_videotoolbox`, `libx265`, `libx264`. |
+| `--mode` | Choice | `auto` | Transcoding acceleration mode: `gpu`, `cpu`, `both` (dual-engine parallel), or `auto`. |
+| `--gpu` | Flag | `False` | Shorthand to force GPU hardware transcoding. |
+| `--cpu` | Flag | `False` | Shorthand to force multi-threaded CPU software transcoding. |
+| `--both` | Flag | `False` | Shorthand for Dual-Engine mode (concurrently runs GPU + CPU for maximum conversion speed). |
+| `--bar-style` | Choice | `level` | Visual style of level progress bar: `level` (`▰▰▰▱▱`), `blocks` (`███░░`), or `ascii`. |
+| `--encoder` | Choice | `auto` | Choose `auto`, `hevc_nvenc`, `hevc_qsv`, `hevc_vaapi`, `hevc_videotoolbox`, `hevc_amf`, `libx265`, `libx264`. |
 | `--cq` | Integer | `24` | Constant Quality / CRF level (18 = near lossless, 24 = recommended balance, 28 = higher compression). |
-| `--preset` | String | `p4` | NVENC speed preset (`p1` fastest to `p7` slowest / highest quality). |
+| `--preset` | String | `p4` | Encoder speed preset (NVENC: `p1`-`p7`; CPU: `ultrafast`-`veryslow`). |
+| `--cpu-threads` | Integer | `0` | Threads allocated for CPU encoding (0 = auto-detect all logical cores). |
+| `--gpu-workers` | Integer | `1` | Number of parallel GPU worker threads in `--mode both`. |
+| `--cpu-workers` | Integer | `1` | Number of parallel CPU worker threads in `--mode both`. |
+| `--hwaccel` | Choice | `auto` | Hardware decoding acceleration API (`auto`, `cuda`, `qsv`, `vaapi`, `d3d11va`, `none`). |
 | `--delete-original`| Flag | `False` | Deletes the input file when transcoding from MKV/AVI/MOV to MP4. |
 | `--overwrite` | Flag | `False` | Overwrites existing output MP4 file if already present. |
 | `--re-encode-hevc` | Flag | `False` | Forces re-encoding even if the file is already encoded in H.265. |
@@ -189,27 +204,30 @@ python3 transcode_media.py /data/media/movies --overwrite --re-encode-hevc
 
 ---
 
-## 📊 Terminal Telemetry Preview
+## 📊 Real-Time Level Progress Bar & Telemetry
 
 ```text
 ==============================================================================
 ⚡ Batch Transcoding Queue: 14 media candidate(s) found
-Hardware Engine: NVIDIA NVENC (GPU) (hevc_nvenc)
+Hardware Strategy: Mode: BOTH | Engine: NVIDIA NVENC (GPU) (hevc_nvenc)
 ==============================================================================
 
-[1/14] ✔ [COMPLIANT] Already H.265/MP4: Interstellar.2014.1080p.mp4
+⚡ Dual-Engine Parallel Acceleration Active!
+  • Worker 1 (GPU): Dedicated ASIC (NVIDIA NVENC [RTX 3060])
+  • Worker 2 (CPU): Multi-Threaded CPU (libx265 -threads 16)
+  • Concurrent Queue: Dynamically dispatching 14 file(s) across both silicon blocks...
 
-[2/14]
-▶ Transcoding: Dune.Part.Two.2024.1080p.mkv
-  Source: H264 1920x1080 | 11.4 GB
-  Engine: NVIDIA NVENC (GPU) (CQ/CRF: 24)
+▶ Transcoding: Dune.Part.Two.2024.1080p.mkv [1/14]
+  Source: H264 1920x1080 | 11.4 GB | 02:46:12
+  Engine: NVIDIA NVENC (GPU) (CQ/CRF: 24) [Mode: BOTH]
+  [Queue 1/14 | LVL 1/10] [GPU: hevc_nvenc] Level: [▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱] 62.4% [LVL 7/10] ⚡ 14.8x | 355 fps | ETA: 04:15 | 01:43:42/02:46:12
   ✔ Complete: 11.4 GB ➔ 4.2 GB (+63.1%) in 04m 12s
 
-[3/14]
-▶ Transcoding: The.Matrix.1999.Remux.mkv
-  Source: VC1 1920x1080 | 18.2 GB
-  Engine: NVIDIA NVENC (GPU) (CQ/CRF: 24)
-  ✔ Complete: 18.2 GB ➔ 6.1 GB (+66.4%) in 06m 45s
+▶ Transcoding: The.Matrix.1999.Remux.mkv [2/14]
+  Source: VC1 1920x1080 | 18.2 GB | 02:16:00
+  Engine: Multi-Threaded CPU (libx265 -threads 16) (CQ/CRF: 24) [Mode: BOTH]
+  [Queue 2/14 | LVL 2/10] [CPU: libx265]   Level: [▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱] 41.5% [LVL 5/10] ⚡ 2.4x  |  58 fps | ETA: 18:30 | 00:56:26/02:16:00
+  ✔ Complete: 18.2 GB ➔ 6.1 GB (+66.4%) in 08m 45s
 
 ==============================================================================
 ✨ Transcoding Batch Summary

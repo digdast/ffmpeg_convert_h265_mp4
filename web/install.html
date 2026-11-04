@@ -368,28 +368,58 @@
           </thead>
           <tbody>
             <tr>
-              <td><span class="flag-badge">target</span></td>
+              <td><span class="flag-badge">path</span></td>
               <td>Path (Positional)</td>
               <td><em>Required</em></td>
               <td>Directory or individual video file path to scan and transcode.</td>
             </tr>
             <tr>
-              <td><span class="flag-badge">--engine</span></td>
-              <td><code>auto</code>, <code>nvenc</code>, <code>qsv</code>, <code>videotoolbox</code>, <code>vaapi</code>, <code>cpu</code></td>
+              <td><span class="flag-badge">--mode</span></td>
+              <td><code>auto</code>, <code>gpu</code>, <code>cpu</code>, <code>both</code></td>
               <td><code>auto</code></td>
-              <td>Select hardware GPU encoder engine or fallback to multi-core CPU.</td>
+              <td>Hardware strategy: force <code>gpu</code>, multi-threaded <code>cpu</code>, or <code>both</code> (Dual-Engine parallel GPU+CPU execution).</td>
             </tr>
             <tr>
-              <td><span class="flag-badge">--cq / --crf</span></td>
+              <td><span class="flag-badge">--gpu / --cpu / --both</span></td>
+              <td>Flags</td>
+              <td><code>False</code></td>
+              <td>Shorthand flags to force GPU, CPU, or Dual-Engine parallel mode for faster conversions.</td>
+            </tr>
+            <tr>
+              <td><span class="flag-badge">--bar-style</span></td>
+              <td><code>level</code>, <code>blocks</code>, <code>ascii</code></td>
+              <td><code>level</code></td>
+              <td>Visual design of the real-time graduated Level Progress Bar with speed, FPS & ETA.</td>
+            </tr>
+            <tr>
+              <td><span class="flag-badge">--encoder</span></td>
+              <td><code>auto</code>, <code>hevc_nvenc</code>, <code>hevc_qsv</code>, <code>hevc_vaapi</code>, <code>hevc_videotoolbox</code>, <code>libx265</code></td>
+              <td><code>auto</code></td>
+              <td>Explicitly select video encoder (NVENC, QuickSync, VAAPI, VideoToolbox, CPU).</td>
+            </tr>
+            <tr>
+              <td><span class="flag-badge">--cq</span></td>
               <td>Integer (0–51)</td>
               <td><code>24</code></td>
-              <td>Constant Quality / Rate Factor. Lower value = higher quality and larger file.</td>
+              <td>Constant Quality / Rate Factor. Lower value = higher quality (18-22 high, 24 balanced).</td>
             </tr>
             <tr>
               <td><span class="flag-badge">--preset</span></td>
               <td>String</td>
-              <td><code>p5</code> (NVENC) / <code>medium</code> (CPU)</td>
-              <td>Encoding speed/efficiency trade-off preset (e.g. <code>p1</code>-<code>p7</code>, <code>fast</code>, <code>slow</code>).</td>
+              <td><code>p4</code> (GPU) / <code>medium</code> (CPU)</td>
+              <td>Speed/efficiency preset (NVENC: <code>p1</code>-<code>p7</code>; CPU: <code>ultrafast</code>-<code>veryslow</code>).</td>
+            </tr>
+            <tr>
+              <td><span class="flag-badge">--cpu-threads</span></td>
+              <td>Integer</td>
+              <td><code>0</code> (All)</td>
+              <td>Number of CPU threads allocated to CPU encoding (0 = auto-detect all cores).</td>
+            </tr>
+            <tr>
+              <td><span class="flag-badge">--gpu-workers / --cpu-workers</span></td>
+              <td>Integer</td>
+              <td><code>1</code> / <code>1</code></td>
+              <td>Parallel concurrency workers per engine in <code>--mode both</code> batch execution.</td>
             </tr>
             <tr>
               <td><span class="flag-badge">--delete-original</span></td>
@@ -398,28 +428,22 @@
               <td>Delete original source file upon successful atomic completion and verification.</td>
             </tr>
             <tr>
+              <td><span class="flag-badge">--overwrite</span></td>
+              <td>Flag</td>
+              <td><code>False</code></td>
+              <td>Overwrite existing output MP4 file if one exists.</td>
+            </tr>
+            <tr>
+              <td><span class="flag-badge">--re-encode-hevc</span></td>
+              <td>Flag</td>
+              <td><code>False</code></td>
+              <td>Forces re-encoding even if video is already compliant H.265.</td>
+            </tr>
+            <tr>
               <td><span class="flag-badge">--dry-run</span></td>
               <td>Flag</td>
               <td><code>False</code></td>
               <td>Probe and scan media library without executing any FFmpeg transcode commands.</td>
-            </tr>
-            <tr>
-              <td><span class="flag-badge">--no-audio-transcode</span></td>
-              <td>Flag</td>
-              <td><code>False</code></td>
-              <td>Copy all audio streams directly without downmixing/transcoding to AAC stereo.</td>
-            </tr>
-            <tr>
-              <td><span class="flag-badge">--audio-bitrate</span></td>
-              <td>String</td>
-              <td><code>192k</code></td>
-              <td>Target bitrate for transcoded audio tracks (e.g., <code>128k</code>, <code>256k</code>, <code>320k</code>).</td>
-            </tr>
-            <tr>
-              <td><span class="flag-badge">--exts</span></td>
-              <td>List of Strings</td>
-              <td><code>.mkv .avi .mov .wmv .webm .mp4</code></td>
-              <td>Space-separated list of video file extensions to evaluate.</td>
             </tr>
             <tr>
               <td><span class="flag-badge">-h, --help</span></td>

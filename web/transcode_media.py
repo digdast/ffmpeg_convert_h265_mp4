@@ -4,29 +4,38 @@
 ⚡ GPU-Accelerated H.265 (HEVC) & MP4 Batch Media Transcoder
 ================================================================================
 High-performance media transcoding pipeline utilizing hardware-accelerated
-video encoding (NVIDIA NVENC, Intel QSV, Apple VideoToolbox, VAAPI) with
-automatic CPU fallback (libx265 / libx264).
+video encoding (NVIDIA NVENC, Intel QSV, Apple VideoToolbox, VAAPI, AMD AMF)
+with multi-threaded CPU encoding (libx265 / libx264) and Dual-Engine (GPU+CPU)
+parallel execution.
 
 Features:
-- Hardware auto-detection: NVIDIA NVENC (hevc_nvenc), Intel QSV, VAAPI, VideoToolbox
+- Real-time graduated Level Progress Bar with speed, FPS, ETA, bitrate & level meters
+- Acceleration Modes:
+    * --mode gpu  (or --gpu): Force hardware GPU encoding & decoding
+    * --mode cpu  (or --cpu): Force multi-threaded software CPU encoding
+    * --mode both (or --both): Dual-Engine concurrent GPU + CPU parallel execution
+    * --mode auto: Auto-detect best hardware encoder with CPU fallback
 - Safe atomic encoding via temp files (preserves original on failure or interrupt)
 - Media preservation: multi-track audio copy/transcode, subtitles, and metadata
 - FastStart streaming optimization (`-movflags +faststart`)
 - Space savings analytics: tracks before/after file sizes and percentage reduction
 - Dry-run mode, recursive scanning, skip already-compliant H.265 files
-- Rich terminal output with progress indicators and colorized metrics
 ================================================================================
 """
 
 import argparse
+import glob
 import json
 import logging
 import os
+import queue
+import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 # Ensure stdout and stderr handle utf-8 safely on Windows/Linux
 if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
@@ -42,19 +51,42 @@ class Colors:
     RED = "\033[91m"
     BLUE = "\033[94m"
     MAGENTA = "\033[95m"
+    WHITE = "\033[97m"
     BOLD = "\033[1m"
     DIM = "\033[2m"
     RESET = "\033[0m"
 
-# Supported video container extensions
+
 VIDEO_EXTENSIONS = (
     ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm",
     ".m4v", ".ts", ".mts", ".m2ts", ".vob", ".mpg", ".mpeg", ".mp4"
 )
 
 
+def get_binary_path(binary_name: str) -> str:
+    """Resolve binary executable path, with Windows fallback lookups."""
+    found = shutil.which(binary_name)
+    if found:
+        return found
+    if os.name == "nt":
+        ext = ".exe" if not binary_name.lower().endswith(".exe") else ""
+        candidates = [
+            rf"C:\ffmpeg\bin\{binary_name}{ext}",
+            rf"C:\ProgramData\chocolatey\bin\{binary_name}{ext}",
+            os.path.expandvars(rf"%LOCALAPPDATA%\ffmpeg-transcoder\{binary_name}{ext}"),
+            os.path.expandvars(rf"%ProgramFiles%\ffmpeg\bin\{binary_name}{ext}"),
+        ]
+        # Check WinGet package directories recursively
+        winget_pattern = os.path.expandvars(rf"%LOCALAPPDATA%\Microsoft\WinGet\Packages\**\{binary_name}{ext}")
+        candidates.extend(glob.glob(winget_pattern, recursive=True))
+        for c in candidates:
+            if os.path.isfile(c):
+                return c
+    return binary_name
+
+
 def format_bytes(num_bytes: float) -> str:
-    """Format bytes into human-readable representation."""
+    """Format bytes into human-readable binary prefix."""
     for unit in ["B", "KB", "MB", "GB", "TB"]:
         if abs(num_bytes) < 1024.0:
             return f"{num_bytes:3.1f} {unit}"
@@ -63,23 +95,187 @@ def format_bytes(num_bytes: float) -> str:
 
 
 def format_duration(seconds: float) -> str:
-    """Format seconds into HH:MM:SS."""
+    """Format seconds into HH:MM:SS or MM:SS."""
+    seconds = max(0.0, seconds)
     m, s = divmod(int(seconds), 60)
     h, m = divmod(m, 60)
     if h > 0:
-        return f"{h:02d}h {m:02d}m {s:02d}s"
-    return f"{m:02d}m {s:02d}s"
+        return f"{h:02d}:{m:02d}:{s:02d}"
+    return f"{m:02d}:{s:02d}"
 
 
+# ==============================================================================
+# 📊 Graduated Level Progress Bar
+# ==============================================================================
+class LevelProgressBar:
+    """
+    Renders an interactive, graduated level progress bar.
+    Displays:
+    - 10-level graduated meter [LVL 1/10] through [LVL MAX]
+    - Dynamic segmented fill: [██████████░░░░░░░░░░] or [▰▰▰▰▰▱▱▱▱▱]
+    - Stage color thresholds (Cyan -> Yellow -> Blue -> Lime -> Bold Green)
+    - Real-time telemetry: Speed multiplier (⚡ 8.4x), FPS, ETA, elapsed/total time, bitrate
+    - Dual-level queue indicator for batch jobs
+    """
+    def __init__(
+        self,
+        total_duration: float,
+        file_name: str,
+        file_idx: int = 1,
+        total_files: int = 1,
+        engine_label: str = "GPU",
+        style: str = "level",
+        print_lock: Optional[threading.Lock] = None
+    ):
+        self.total_duration = max(0.001, total_duration)
+        self.file_name = file_name
+        self.file_idx = file_idx
+        self.total_files = total_files
+        self.engine_label = engine_label
+        self.style = style
+        self.print_lock = print_lock
+        self.start_time = time.time()
+        self.last_render_time = 0.0
+        self.last_pct = 0.0
+        self.last_non_tty_milestone = -1
+        self.is_tty = sys.stdout.isatty() if sys.stdout else False
+
+    def get_stage_color(self, pct: float) -> str:
+        if pct >= 99.5:
+            return Colors.GREEN + Colors.BOLD
+        elif pct >= 75.0:
+            return Colors.GREEN
+        elif pct >= 50.0:
+            return Colors.CYAN
+        elif pct >= 25.0:
+            return Colors.YELLOW
+        else:
+            return Colors.BLUE
+
+    def render(
+        self,
+        out_seconds: float,
+        speed_str: str = "N/A",
+        fps_str: str = "0",
+        bitrate_str: str = "N/A",
+        current_bytes: int = 0,
+        force: bool = False
+    ):
+        now = time.time()
+        if not force and (now - self.last_render_time < 0.08):
+            return
+        self.last_render_time = now
+
+        pct = min(100.0, max(0.0, (out_seconds / self.total_duration) * 100.0))
+        self.last_pct = pct
+
+        # Level calculation (1 to 10 or MAX)
+        level_num = min(10, max(1, int(pct // 10) + (1 if (pct % 10 > 0.01 and pct < 99.0) else 0)))
+        if pct >= 99.9:
+            lvl_tag = f"{Colors.GREEN}{Colors.BOLD}[LVL MAX]{Colors.RESET}"
+        else:
+            lvl_tag = f"{Colors.YELLOW}[LVL {level_num:2d}/10]{Colors.RESET}"
+
+        # Segmented Level Bar (20 characters)
+        bar_len = 20
+        filled = int(round(bar_len * (pct / 100.0)))
+        unfilled = max(0, bar_len - filled)
+        stage_color = self.get_stage_color(pct)
+
+        if self.style == "level":
+            bar_str = f"{stage_color}{'▰' * filled}{Colors.DIM}{'▱' * unfilled}{Colors.RESET}"
+        elif self.style == "blocks":
+            bar_str = f"{stage_color}{'█' * filled}{Colors.DIM}{'░' * unfilled}{Colors.RESET}"
+        else:
+            bar_str = f"{stage_color}{'=' * filled}{Colors.DIM}{'-' * unfilled}{Colors.RESET}"
+
+        # Timestamps
+        time_str = f"{format_duration(out_seconds)}/{format_duration(self.total_duration)}"
+
+        # Dynamic ETA
+        elapsed = now - self.start_time
+        if pct > 0.5:
+            est_total = elapsed / (pct / 100.0)
+            remaining = max(0, est_total - elapsed)
+            eta_str = format_duration(remaining)
+        else:
+            eta_str = "--:--"
+
+        # Speed indicator
+        clean_speed = speed_str.strip()
+        if clean_speed and clean_speed != "N/A":
+            speed_disp = f"{Colors.GREEN}⚡ {clean_speed}{Colors.RESET}"
+        else:
+            speed_disp = f"{Colors.DIM}N/A{Colors.RESET}"
+
+        # Batch Queue Level Indicator
+        queue_tag = ""
+        if self.total_files > 1:
+            q_pct = ((self.file_idx - 1) / self.total_files) * 100.0
+            q_lvl = min(10, max(1, int(q_pct // 10) + 1))
+            queue_tag = f"{Colors.DIM}[Queue {self.file_idx}/{self.total_files} | LVL {q_lvl}/10]{Colors.RESET} "
+
+        engine_tag = f"{Colors.CYAN}[{self.engine_label}]{Colors.RESET}"
+
+        if self.is_tty:
+            # Build TTY in-place update line
+            line = (
+                f"\r\033[K {queue_tag}{engine_tag} "
+                f"Level: [{bar_str}] {stage_color}{pct:5.1f}%{Colors.RESET} {lvl_tag} "
+                f"{speed_disp} | {fps_str} fps | ETA: {eta_str} | {time_str}"
+            )
+            # Ensure line does not wrap terminal columns
+            term_cols = shutil.get_terminal_size((100, 24)).columns
+            if len(re.sub(r'\x1b\[[0-9;]*m', '', line)) > term_cols:
+                line = (
+                    f"\r\033[K {engine_tag} [{bar_str}] {stage_color}{pct:5.1f}%{Colors.RESET} "
+                    f"{lvl_tag} {speed_disp} | ETA: {eta_str} | {time_str}"
+                )
+
+            if self.print_lock:
+                with self.print_lock:
+                    sys.stdout.write(line)
+                    sys.stdout.flush()
+            else:
+                sys.stdout.write(line)
+                sys.stdout.flush()
+        else:
+            # Non-TTY clean milestone output (every 10%)
+            milestone = int(pct // 10)
+            if milestone > self.last_non_tty_milestone or force:
+                self.last_non_tty_milestone = milestone
+                plain_line = (
+                    f"  {queue_tag}{engine_tag} Progress: {pct:5.1f}% [LVL {level_num}/10] | "
+                    f"Speed: {clean_speed} | FPS: {fps_str} | ETA: {eta_str} | {time_str}\n"
+                )
+                if self.print_lock:
+                    with self.print_lock:
+                        sys.stdout.write(plain_line)
+                        sys.stdout.flush()
+                else:
+                    sys.stdout.write(plain_line)
+                    sys.stdout.flush()
+
+    def finish(self):
+        self.render(self.total_duration, speed_str="Done", force=True)
+        if self.is_tty:
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+
+
+# ==============================================================================
+# 🔍 Hardware Detector & Encoder Selector
+# ==============================================================================
 class HardwareDetector:
-    """Detects available hardware accelerators, GPUs (Intel iGPU, Intel Arc, NVIDIA, AMD, Apple), and encoders."""
+    """Detects available hardware accelerators, GPUs (Intel, NVIDIA, AMD, Apple), and encoders."""
 
     @staticmethod
     def get_available_encoders() -> List[str]:
         """Query ffmpeg for available video encoders."""
+        ffmpeg_bin = get_binary_path("ffmpeg")
         try:
             res = subprocess.run(
-                ["ffmpeg", "-encoders"],
+                [ffmpeg_bin, "-encoders"],
                 capture_output=True,
                 text=True,
                 check=True
@@ -91,135 +287,85 @@ class HardwareDetector:
                     encoders.append(parts[1])
             return encoders
         except Exception:
-            return []
+            return ["libx265", "libx264"]
 
     @staticmethod
     def get_drm_devices() -> List[Dict]:
-        """
-        Scan /sys/class/drm and /dev/dri for DRM render nodes.
-        Identifies Intel Arc discrete GPUs, Intel iGPUs, NVIDIA, and AMD.
-        """
+        """Inspect Linux DRM render nodes (/dev/dri/by-path and /dev/dri/renderD*)."""
         devices = []
-        dri_dir = "/dev/dri"
-        if not os.path.exists(dri_dir):
+        if not os.path.exists("/dev/dri"):
             return devices
 
-        # Get lspci info if available for hardware naming
-        pci_map = {}
-        try:
-            res = subprocess.run(["lspci", "-nn"], capture_output=True, text=True)
-            for line in res.stdout.splitlines():
-                parts = line.strip().split(maxsplit=1)
-                if len(parts) >= 2:
-                    pci_slot = parts[0]
-                    desc = parts[1]
-                    if any(kw in desc.lower() for kw in ["vga", "3d", "display"]):
-                        pci_map[pci_slot] = desc
-        except Exception:
-            pass
+        by_path_dir = "/dev/dri/by-path"
+        if os.path.exists(by_path_dir):
+            for entry in os.listdir(by_path_dir):
+                if entry.endswith("-render"):
+                    full_sym = os.path.join(by_path_dir, entry)
+                    real_node = os.path.realpath(full_sym)
+                    node_name = os.path.basename(real_node)
+                    pci_match = re.search(r"pci-[0-9a-fA-F]{4}:([0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-9a-fA-F])", entry)
+                    pci_addr = pci_match.group(1) if pci_match else ""
 
-        # Intel Arc DG2 / Alchemist PCI Device IDs (vendor 8086)
-        INTEL_ARC_IDS = {
-            "5690", "5691", "5692", "5693", "5694", "5695",
-            "56a0", "56a1", "56a2", "56a3", "56a4", "56a5", "56a6",
-            "56b0", "56b1", "56b2", "56b3", "56c0", "56c1"
-        }
+                    device_name = "Unknown DRM Device"
+                    is_intel_arc = False
+                    is_intel_igpu = False
 
-        for entry in sorted(os.listdir(dri_dir)):
-            if not entry.startswith("renderD"):
-                continue
+                    if pci_addr:
+                        lspci_cmd = f"lspci -s {pci_addr} -v 2>/dev/null"
+                        try:
+                            lspci_out = subprocess.check_output(lspci_cmd, shell=True, text=True)
+                            for line in lspci_out.splitlines():
+                                if "VGA compatible controller" in line or "Display controller" in line:
+                                    device_name = line.split(":", 2)[-1].strip()
+                                    break
+                            lower_name = device_name.lower()
+                            if "arc" in lower_name or "battlemage" in lower_name or "alchemist" in lower_name:
+                                is_intel_arc = True
+                            elif "intel" in lower_name and ("uhd" in lower_name or "iris" in lower_name or "graphics" in lower_name):
+                                is_intel_igpu = True
+                        except Exception:
+                            pass
 
-            node_path = os.path.join(dri_dir, entry)
-            dev_vendor_path = f"/sys/class/drm/{entry}/device/vendor"
-            dev_device_path = f"/sys/class/drm/{entry}/device/device"
+                    devices.append({
+                        "node": real_node,
+                        "name": node_name,
+                        "pci": pci_addr,
+                        "label": device_name,
+                        "is_intel_arc": is_intel_arc,
+                        "is_intel_igpu": is_intel_igpu
+                    })
 
-            vendor_id = ""
-            device_id = ""
-            if os.path.exists(dev_vendor_path):
-                try:
-                    with open(dev_vendor_path, "r") as f:
-                        vendor_id = f.read().strip().lower().replace("0x", "")
-                except Exception:
-                    pass
-
-            if os.path.exists(dev_device_path):
-                try:
-                    with open(dev_device_path, "r") as f:
-                        device_id = f.read().strip().lower().replace("0x", "")
-                except Exception:
-                    pass
-
-            gpu_type = "unknown"
-            label = f"DRM Node {entry}"
-            is_intel_arc = False
-            is_intel_igpu = False
-
-            # Check matching lspci line
-            pci_desc = ""
-            try:
-                device_link = os.readlink(f"/sys/class/drm/{entry}/device")
-                pci_addr = os.path.basename(device_link)
-                short_pci = pci_addr.split(":")[-2] + ":" + pci_addr.split(":")[-1] if ":" in pci_addr else pci_addr
-                pci_desc = pci_map.get(short_pci, "")
-            except Exception:
-                pass
-
-            if vendor_id == "8086":  # Intel
-                if (device_id in INTEL_ARC_IDS or 
-                    device_id.startswith("e2") or  # Intel Battlemage (BMG)
-                    "arc" in pci_desc.lower() or 
-                    "dg2" in pci_desc.lower() or
-                    "alchemist" in pci_desc.lower() or
-                    "battlemage" in pci_desc.lower()):
-                    gpu_type = "intel_arc"
-                    is_intel_arc = True
-                    arc_name = pci_desc.split(': ')[-1] if ': ' in pci_desc else entry
-                    label = f"Intel Arc GPU ({arc_name})"
-                else:
-                    gpu_type = "intel_igpu"
-                    is_intel_igpu = True
-                    igpu_name = pci_desc.split(': ')[-1] if ': ' in pci_desc else "UHD/Iris Xe"
-                    label = f"Intel iGPU ({igpu_name})"
-            elif vendor_id == "10de":  # NVIDIA
-                gpu_type = "nvidia"
-                nv_name = pci_desc.split(': ')[-1] if ': ' in pci_desc else entry
-                label = f"NVIDIA GPU ({nv_name})"
-            elif vendor_id == "1002":  # AMD
-                gpu_type = "amd"
-                amd_name = pci_desc.split(': ')[-1] if ': ' in pci_desc else entry
-                label = f"AMD Radeon ({amd_name})"
-
-            devices.append({
-                "node": node_path,
-                "entry": entry,
-                "vendor_id": vendor_id,
-                "device_id": device_id,
-                "gpu_type": gpu_type,
-                "label": label,
-                "is_intel_arc": is_intel_arc,
-                "is_intel_igpu": is_intel_igpu,
-                "pci_desc": pci_desc
-            })
+        # Fallback to direct /dev/dri/renderD* enumeration
+        if not devices:
+            for node_name in sorted(os.listdir("/dev/dri")):
+                if node_name.startswith("renderD"):
+                    full_path = os.path.join("/dev/dri", node_name)
+                    devices.append({
+                        "node": full_path,
+                        "name": node_name,
+                        "pci": "",
+                        "label": f"DRM Node {node_name}",
+                        "is_intel_arc": False,
+                        "is_intel_igpu": True
+                    })
 
         return devices
 
     @staticmethod
     def test_encoder(encoder: str, device: Optional[str] = None) -> bool:
-        """
-        Verify if an encoder actually functions with current drivers/hardware.
-        Runs a 1-frame test encoding pipeline with lavfi synthetic color source.
-        """
+        """Verify if an encoder actually functions with current drivers/hardware."""
         if encoder in ("libx265", "libx264"):
             return True
+        ffmpeg_bin = get_binary_path("ffmpeg")
         try:
-            cmd = ["ffmpeg", "-v", "error"]
+            cmd = [ffmpeg_bin, "-v", "error"]
             if encoder == "hevc_vaapi":
                 vaapi_dev = device or "/dev/dri/renderD128"
                 if not os.path.exists(vaapi_dev):
                     return False
                 cmd.extend([
                     "-vaapi_device", vaapi_dev,
-                    "-f", "lavfi", "-i", "color=s=64x64:d=0.04",
+                    "-f", "lavfi", "-i", "color=s=256x256:d=0.04",
                     "-vf", "format=nv12,hwupload",
                     "-c:v", "hevc_vaapi",
                     "-f", "null", "-"
@@ -228,13 +374,14 @@ class HardwareDetector:
                 if device:
                     cmd.extend(["-qsv_device", device])
                 cmd.extend([
-                    "-f", "lavfi", "-i", "color=s=64x64:d=0.04",
+                    "-f", "lavfi", "-i", "color=s=256x256:d=0.04",
+                    "-vf", "format=nv12",
                     "-c:v", "hevc_qsv",
                     "-f", "null", "-"
                 ])
             else:
                 cmd.extend([
-                    "-f", "lavfi", "-i", "color=s=64x64:d=0.04",
+                    "-f", "lavfi", "-i", "color=s=256x256:d=0.04",
                     "-c:v", encoder,
                     "-f", "null", "-"
                 ])
@@ -247,58 +394,67 @@ class HardwareDetector:
     def detect_best_encoder(
         cls,
         preferred_encoder: Optional[str] = None,
-        preferred_device: Optional[str] = None
+        preferred_device: Optional[str] = None,
+        mode: str = "auto"
     ) -> Tuple[str, str, Optional[str]]:
         """
-        Auto-detect best HEVC hardware/CPU encoder and device node.
-        Supports Intel Arc, Intel iGPU, NVIDIA NVENC, Apple VideoToolbox, VAAPI, CPU.
-        Returns: (encoder_name, description, device_node)
+        Detect best HEVC hardware/CPU encoder and device node based on chosen mode:
+        - mode='cpu': Forces multi-threaded software CPU encoding
+        - mode='gpu': Forces hardware GPU encoding (fails if no GPU found)
+        - mode='both': Prioritizes fastest GPU encoder (with companion CPU worker)
+        - mode='auto': Auto-probes best GPU, falls back to CPU
         """
         encoders = cls.get_available_encoders()
         drm_devices = cls.get_drm_devices()
 
-        # Handle user-specified encoder
+        # Mode: Forced CPU
+        if mode == "cpu":
+            if preferred_encoder and preferred_encoder in encoders:
+                return preferred_encoder, f"Forced CPU ({preferred_encoder})", None
+            if "libx265" in encoders:
+                return "libx265", "Multi-Threaded CPU (libx265)", None
+            return "libx264", "Multi-Threaded CPU (libx264)", None
+
+        # User-specified encoder
         if preferred_encoder and preferred_encoder in encoders:
             if preferred_encoder not in ("libx265", "libx264") and not cls.test_encoder(preferred_encoder, preferred_device):
                 print(f" {Colors.YELLOW}⚠ Warning: Specified encoder '{preferred_encoder}' failed hardware initialization test.{Colors.RESET}")
-                print(f"   Falling back to automatic hardware auto-detection...")
+                if mode == "gpu":
+                    raise RuntimeError(f"GPU encoder '{preferred_encoder}' is not functional on this system.")
+                print("   Falling back to automatic hardware auto-detection...")
             else:
                 dev_node = preferred_device
                 if not dev_node and preferred_encoder in ("hevc_qsv", "hevc_vaapi") and drm_devices:
                     dev_node = drm_devices[0]["node"]
                 return preferred_encoder, f"User-Specified ({preferred_encoder})", dev_node
 
-        # 1. Check for Intel Arc dGPU (Highest priority for Intel QuickSync/Arc)
+        # 1. Check for NVIDIA NVENC
+        if "hevc_nvenc" in encoders and cls.test_encoder("hevc_nvenc"):
+            return "hevc_nvenc", "NVIDIA NVENC (GPU)", None
+
+        # 2. Check for Intel Arc dGPU
         arc_gpus = [d for d in drm_devices if d["is_intel_arc"]]
         for arc in arc_gpus:
             node = arc["node"]
-            # Test QSV on Intel Arc
             if "hevc_qsv" in encoders and cls.test_encoder("hevc_qsv", node):
                 return "hevc_qsv", f"Intel QuickSync [{arc['label']}]", node
-            # Test VAAPI on Intel Arc
             if "hevc_vaapi" in encoders and cls.test_encoder("hevc_vaapi", node):
                 return "hevc_vaapi", f"Intel Arc VAAPI [{arc['label']}]", node
 
-        # 2. Check for Intel iGPU (UHD / Iris Xe)
+        # 3. Check for Intel iGPU (UHD / Iris Xe)
         igpu_gpus = [d for d in drm_devices if d["is_intel_igpu"]]
         for igpu in igpu_gpus:
             node = igpu["node"]
-            # Test QSV on Intel iGPU
             if "hevc_qsv" in encoders and cls.test_encoder("hevc_qsv", node):
                 return "hevc_qsv", f"Intel QuickSync iGPU [{igpu['label']}]", node
-            # Test VAAPI on Intel iGPU
             if "hevc_vaapi" in encoders and cls.test_encoder("hevc_vaapi", node):
                 return "hevc_vaapi", f"Intel iGPU VAAPI [{igpu['label']}]", node
-
-        # 3. Check for NVIDIA NVENC (GPU)
-        if "hevc_nvenc" in encoders and cls.test_encoder("hevc_nvenc"):
-            return "hevc_nvenc", "NVIDIA NVENC (GPU)", None
 
         # 4. Check for Apple Silicon VideoToolbox
         if "hevc_videotoolbox" in encoders and cls.test_encoder("hevc_videotoolbox"):
             return "hevc_videotoolbox", "Apple VideoToolbox (Apple Silicon)", None
 
-        # 5. Check any remaining DRM device via VAAPI (e.g. AMD Radeon or generic Intel)
+        # 5. Check any remaining DRM device via VAAPI (AMD Radeon, etc.)
         if "hevc_vaapi" in encoders:
             for d in drm_devices:
                 node = d["node"]
@@ -311,9 +467,16 @@ class HardwareDetector:
         if "hevc_amf" in encoders and cls.test_encoder("hevc_amf"):
             return "hevc_amf", "AMD AMF (GPU)", None
 
-        # 7. Check generic QSV without device node
+        # 7. Check generic QSV without explicit node
         if "hevc_qsv" in encoders and cls.test_encoder("hevc_qsv"):
             return "hevc_qsv", "Intel QuickSync (GPU)", None
+
+        # If mode was strictly 'gpu', do not fallback to CPU
+        if mode == "gpu":
+            raise RuntimeError(
+                "No functional GPU hardware encoder (NVENC, QSV, VAAPI, VideoToolbox, AMF) could be initialized. "
+                "Ensure GPU drivers and FFmpeg hardware libraries are installed, or run with --mode cpu."
+            )
 
         # 8. High-efficiency CPU Fallback (libx265)
         if "libx265" in encoders:
@@ -323,14 +486,41 @@ class HardwareDetector:
         return "libx264", "Software CPU Fallback (libx264)", None
 
 
+# Subtitle formats
+BITMAP_SUBTITLE_CODECS = {
+    "hdmv_pgs_subtitle",
+    "dvd_subtitle",
+    "dvdsub",
+    "xsub",
+    "dvb_subtitle",
+    "dvbsub",
+    "pgssub"
+}
+
+TEXT_SUBTITLE_CODECS = {
+    "subrip",
+    "srt",
+    "mov_text",
+    "webvtt",
+    "text",
+    "ttml",
+    "ass",
+    "ssa"
+}
+
+
+# ==============================================================================
+# 🎞 Media Prober
+# ==============================================================================
 class MediaProber:
-    """Inspects video metadata via ffprobe."""
+    """Extracts stream metadata using ffprobe."""
 
     @staticmethod
     def probe(file_path: str) -> Optional[Dict]:
         """Execute ffprobe and return parsed JSON streams."""
+        ffprobe_bin = get_binary_path("ffprobe")
         cmd = [
-            "ffprobe",
+            ffprobe_bin,
             "-v", "quiet",
             "-print_format", "json",
             "-show_format",
@@ -345,7 +535,7 @@ class MediaProber:
 
     @classmethod
     def get_video_info(cls, file_path: str) -> Optional[Dict]:
-        """Extract primary video stream codec and dimensions."""
+        """Extract primary video stream codec, duration, dimensions, and subtitle tracks."""
         data = cls.probe(file_path)
         if not data or "streams" not in data:
             return None
@@ -366,45 +556,76 @@ class MediaProber:
         except (ValueError, TypeError):
             duration = 0.0
 
+        subtitles = []
+        for s in data.get("streams", []):
+            if s.get("codec_type") == "subtitle":
+                cname = s.get("codec_name", "").lower()
+                subtitles.append({
+                    "index": s.get("index"),
+                    "codec": cname,
+                    "is_bitmap": cname in BITMAP_SUBTITLE_CODECS
+                })
+
         return {
             "codec": video_stream.get("codec_name", "").lower(),
             "width": video_stream.get("width", 0),
             "height": video_stream.get("height", 0),
             "bitrate": int(data.get("format", {}).get("bit_rate") or video_stream.get("bit_rate") or 0),
             "duration": duration,
-            "format_name": data.get("format", {}).get("format_name", "")
+            "format_name": data.get("format", {}).get("format_name", ""),
+            "subtitles": subtitles
         }
 
 
+# ==============================================================================
+# ⚡ Transcoder Engine
+# ==============================================================================
 class Transcoder:
-    """Manages batch GPU/CPU transcoding execution."""
+    """Manages GPU, CPU, and Dual-Engine (Both) batch media transcoding execution."""
 
     def __init__(
         self,
         encoder: str,
         hw_desc: str,
         device: Optional[str] = None,
+        mode: str = "auto",
         cq: int = 24,
         preset: str = "p4",
+        cpu_threads: int = 0,
+        gpu_workers: int = 1,
+        cpu_workers: int = 1,
+        hwaccel: str = "auto",
+        bar_style: str = "level",
         audio_codec: str = "aac",
         audio_bitrate: str = "192k",
         overwrite: bool = False,
         delete_original: bool = False,
         skip_hevc: bool = True,
+        container: str = "auto",
         dry_run: bool = False
     ):
         self.encoder = encoder
         self.hw_desc = hw_desc
         self.device = device
+        self.mode = mode
         self.cq = cq
         self.preset = preset
+        self.cpu_threads = cpu_threads
+        self.gpu_workers = max(1, gpu_workers)
+        self.cpu_workers = max(1, cpu_workers)
+        self.hwaccel = hwaccel
+        self.bar_style = bar_style
         self.audio_codec = audio_codec
         self.audio_bitrate = audio_bitrate
         self.overwrite = overwrite
         self.delete_original = delete_original
         self.skip_hevc = skip_hevc
+        self.container = container
         self.dry_run = dry_run
-        self.current_temp_output = None
+
+        self.current_temp_outputs: List[str] = []
+        self.stats_lock = threading.Lock()
+        self.print_lock = threading.Lock()
 
         self.stats = {
             "scanned": 0,
@@ -419,24 +640,49 @@ class Transcoder:
             "start_time": time.time()
         }
 
-    def build_ffmpeg_command(self, input_path: str, output_path: str, force_cpu: bool = False) -> List[str]:
-        """Construct the optimized FFmpeg CLI argument list."""
-        cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-stats"]
-        encoder = "libx265" if force_cpu else self.encoder
+    def build_ffmpeg_command(
+        self,
+        input_path: str,
+        output_path: str,
+        force_cpu: bool = False,
+        active_encoder: Optional[str] = None,
+        extra_args: Optional[List[str]] = None,
+        subtitles: Optional[List[Dict]] = None
+    ) -> List[str]:
+        """Construct the optimized FFmpeg CLI argument list with hardware decoding & encoding."""
+        ffmpeg_bin = get_binary_path("ffmpeg")
+        cmd = [ffmpeg_bin, "-y", "-hide_banner", "-nostats", "-loglevel", "error"]
+        encoder = "libx265" if force_cpu else (active_encoder or self.encoder)
 
-        # Hardware-specific input/output flags
+        # Hardware-accelerated decoding input flags
+        if not force_cpu and self.hwaccel != "none":
+            if self.hwaccel == "auto":
+                if encoder == "hevc_nvenc":
+                    cmd.extend(["-hwaccel", "cuda"])
+                elif encoder == "hevc_qsv":
+                    cmd.extend(["-hwaccel", "qsv"])
+                elif encoder == "hevc_vaapi":
+                    cmd.extend(["-hwaccel", "vaapi"])
+                elif encoder == "hevc_videotoolbox":
+                    cmd.extend(["-hwaccel", "videotoolbox"])
+            else:
+                cmd.extend(["-hwaccel", self.hwaccel])
+
+        # Explicit stream mapping: primary video and audio
+        cmd.extend(["-map", "0:v:0", "-map", "0:a?"])
+
+        # Hardware-specific encoding flags
         if encoder == "hevc_nvenc":
-            # NVIDIA NVENC GPU Pipeline
             cmd.extend([
                 "-i", input_path,
                 "-c:v", "hevc_nvenc",
                 "-preset", self.preset if self.preset in ["p1", "p2", "p3", "p4", "p5", "p6", "p7", "slow", "medium", "fast"] else "p4",
                 "-cq:v", str(self.cq),
                 "-b:v", "0",
-                "-spatial_aq", "1"
+                "-spatial_aq", "1",
+                "-temporal_aq", "1"
             ])
         elif encoder == "hevc_qsv":
-            # Intel QuickSync (Intel Arc dGPU & Intel iGPU)
             qsv_presets = {
                 "p1": "veryfast", "p2": "faster", "p3": "fast",
                 "p4": "medium", "p5": "slow", "p6": "slower", "p7": "veryslow"
@@ -446,12 +692,12 @@ class Transcoder:
                 cmd.extend(["-qsv_device", self.device])
             cmd.extend([
                 "-i", input_path,
+                "-vf", "format=nv12",
                 "-c:v", "hevc_qsv",
                 "-global_quality", str(self.cq),
                 "-preset", qsv_preset
             ])
         elif encoder == "hevc_vaapi":
-            # Linux VAAPI (Intel Arc dGPU, Intel iGPU, AMD Radeon)
             vaapi_dev = self.device if (self.device and not force_cpu) else "/dev/dri/renderD128"
             cmd.extend([
                 "-vaapi_device", vaapi_dev,
@@ -461,187 +707,304 @@ class Transcoder:
                 "-qp", str(self.cq)
             ])
         elif encoder == "hevc_videotoolbox":
-            # Apple Silicon VideoToolbox
             cmd.extend([
                 "-i", input_path,
                 "-c:v", "hevc_videotoolbox",
                 "-q:v", str(max(20, 100 - self.cq * 2))
             ])
+        elif encoder == "hevc_amf":
+            cmd.extend([
+                "-i", input_path,
+                "-c:v", "hevc_amf",
+                "-quality", "speed",
+                "-rc", "cqp",
+                "-qp_i", str(self.cq),
+                "-qp_p", str(self.cq)
+            ])
         elif encoder == "libx265":
-            # Software CPU HEVC
+            cpu_p = self.preset if self.preset in ["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"] else "medium"
             cmd.extend([
                 "-i", input_path,
                 "-c:v", "libx265",
                 "-crf", str(self.cq),
-                "-preset", "medium"
+                "-preset", cpu_p,
+                "-threads", str(self.cpu_threads),
+                "-x265-params", "no-sao=1:aq-mode=3"
             ])
         else:
-            # CPU Fallback
+            # Fallback (libx264 or generic)
             cmd.extend([
                 "-i", input_path,
                 "-c:v", encoder,
-                "-crf", str(self.cq)
+                "-crf", str(self.cq),
+                "-threads", str(self.cpu_threads)
             ])
 
-        # Audio and Container configuration
-        # Stream copy compatible AAC audio, otherwise transcode
+        # Extra hardware args (e.g. -gpu 0, -gpu 1)
+        if extra_args:
+            for arg in extra_args:
+                if arg not in cmd:
+                    cmd.append(arg)
+
+        # Audio & Subtitle stream mapping based on container format
+        out_ext = os.path.splitext(output_path)[1].lower()
+        if out_ext == ".mkv":
+            # Matroska container: natively preserves all audio codecs and bitmap/text subtitles losslessly
+            cmd.extend(["-c:a", "copy"])
+            if subtitles:
+                cmd.extend(["-map", "0:s?", "-c:s", "copy"])
+            else:
+                cmd.extend(["-sn"])
+        else:
+            # MP4 / M4V / MOV container
+            cmd.extend(["-c:a", self.audio_codec, "-b:a", self.audio_bitrate])
+            text_subs = [s for s in (subtitles or []) if not s.get("is_bitmap")]
+            if text_subs:
+                for ts in text_subs:
+                    cmd.extend(["-map", f"0:{ts['index']}"])
+                cmd.extend(["-c:s", "mov_text"])
+            else:
+                # Strictly disable subtitles so FFmpeg never attempts to encode bitmap subs into mov_text
+                cmd.extend(["-sn"])
+            cmd.extend(["-movflags", "+faststart"])
+
         cmd.extend([
-            "-c:a", self.audio_codec,
-            "-b:a", self.audio_bitrate,
-            "-c:s", "mov_text",          # Standard MP4 timed text subtitles
-            "-movflags", "+faststart",   # Web / Stream optimized index at head
+            "-progress", "pipe:1",
             output_path
         ])
 
         return cmd
 
-    def transcode_file(self, file_path: str) -> bool:
-        """Process an individual media file."""
-        self.stats["scanned"] += 1
+    def transcode_file(
+        self,
+        file_path: str,
+        file_idx: int = 1,
+        total_files: int = 1,
+        worker_engine: Optional[str] = None,
+        worker_desc: Optional[str] = None,
+        extra_args: Optional[List[str]] = None
+    ) -> bool:
+        """Process an individual media file with the interactive Level Progress Bar."""
+        with self.stats_lock:
+            self.stats["scanned"] += 1
+
         base_dir = os.path.dirname(file_path)
         file_name = os.path.basename(file_path)
-        base_name, ext = os.path.splitext(file_name)
+        base_name, in_ext = os.path.splitext(file_name)
 
-        final_output = os.path.join(base_dir, f"{base_name}.mp4")
-        temp_output = os.path.join(base_dir, f".{base_name}.transcoding.mp4")
+        # Determine target container format
+        if self.container == "mkv":
+            out_ext = ".mkv"
+        elif self.container == "mp4":
+            out_ext = ".mp4"
+        else:  # auto / same
+            out_ext = in_ext.lower() if in_ext.lower() in [".mkv", ".mp4"] else ".mp4"
+
+        final_output = os.path.join(base_dir, f"{base_name}{out_ext}")
+        temp_output = os.path.join(base_dir, f".{base_name}.transcoding_{file_idx}{out_ext}")
 
         orig_size = os.path.getsize(file_path)
-        self.stats["orig_bytes"] += orig_size
+        with self.stats_lock:
+            self.stats["orig_bytes"] += orig_size
 
-        # Probe video
+        # Probe video and subtitle streams
         info = MediaProber.get_video_info(file_path)
         if not info:
-            print(f" {Colors.YELLOW}⚠ [SKIP]{Colors.RESET} Could not probe video stream: {file_name}")
-            self.stats["skipped"] += 1
+            with self.print_lock:
+                print(f" {Colors.YELLOW}⚠ [SKIP]{Colors.RESET} Could not probe video stream: {file_name}")
+            with self.stats_lock:
+                self.stats["skipped"] += 1
             return False
 
-        # Check if already compliant H.265 in MP4 container
-        is_already_hevc = info["codec"] in ["hevc", "h265"]
-        is_mp4_container = ext.lower() == ".mp4"
-
-        if is_already_hevc and is_mp4_container and self.skip_hevc:
-            print(f" {Colors.DIM}✔ [COMPLIANT]{Colors.RESET} Already H.265/MP4: {Colors.CYAN}{file_name}{Colors.RESET}")
-            self.stats["skipped"] += 1
-            self.stats["new_bytes"] += orig_size
-            return False
+        # Check if already compliant H.265 / AV1
+        is_already_hevc = info["codec"] in ["hevc", "h265", "av1"]
+        if is_already_hevc and self.skip_hevc:
+            if self.container in ("auto", "same") or in_ext.lower() == out_ext:
+                with self.print_lock:
+                    print(f" {Colors.DIM}✔ [COMPLIANT]{Colors.RESET} Already {info['codec'].upper()}: {Colors.CYAN}{file_name}{Colors.RESET}")
+                with self.stats_lock:
+                    self.stats["skipped"] += 1
+                    self.stats["new_bytes"] += orig_size
+                return False
 
         if os.path.exists(final_output) and file_path != final_output and not self.overwrite:
-            print(f" {Colors.YELLOW}⚠ [EXISTS]{Colors.RESET} Output already exists (use --overwrite): {os.path.basename(final_output)}")
-            self.stats["skipped"] += 1
-            self.stats["new_bytes"] += orig_size
+            with self.print_lock:
+                print(f" {Colors.YELLOW}⚠ [EXISTS]{Colors.RESET} Output already exists: {os.path.basename(final_output)}")
+            with self.stats_lock:
+                self.stats["skipped"] += 1
+                self.stats["new_bytes"] += orig_size
             return False
 
-        print(f"\n{Colors.BOLD}▶ Transcoding:{Colors.RESET} {Colors.CYAN}{file_name}{Colors.RESET}")
-        print(f"  {Colors.DIM}Source:{Colors.RESET} {info['codec'].upper()} {info['width']}x{info['height']} | {format_bytes(orig_size)}")
-        print(f"  {Colors.DIM}Engine:{Colors.RESET} {Colors.GREEN}{self.hw_desc}{Colors.RESET} (CQ/CRF: {self.cq})")
+        active_enc = worker_engine or self.encoder
+        active_desc = worker_desc or self.hw_desc
+        engine_label = "GPU" if active_enc not in ("libx265", "libx264") else "CPU"
+
+        # Check for bitmap subtitles when outputting to MP4
+        sub_list = info.get("subtitles", [])
+        bitmap_subs = [s for s in sub_list if s.get("is_bitmap")]
+        if bitmap_subs and out_ext != ".mkv":
+            with self.print_lock:
+                print(f"  {Colors.YELLOW}ℹ [SUBTITLES]{Colors.RESET} Safely bypassing {len(bitmap_subs)} PGS/bitmap subtitle track(s) for MP4 output (use MKV container to preserve PGS subtitles).")
+
+        with self.print_lock:
+            print(f"\n{Colors.BOLD}▶ Transcoding:{Colors.RESET} {Colors.CYAN}{file_name}{Colors.RESET} [{file_idx}/{total_files}]")
+            print(f"  {Colors.DIM}Source:{Colors.RESET} {info['codec'].upper()} {info['width']}x{info['height']} | {format_bytes(orig_size)} | {format_duration(info['duration'])}")
+            print(f"  {Colors.DIM}Engine:{Colors.RESET} {Colors.GREEN}{active_desc}{Colors.RESET} (CQ/CRF: {self.cq}) [Container: {out_ext.upper()}]")
 
         if self.dry_run:
-            print(f"  {Colors.YELLOW}[DRY RUN] Would execute command and convert to {final_output}{Colors.RESET}")
+            with self.print_lock:
+                print(f"  {Colors.YELLOW}[DRY RUN] Would convert to {final_output}{Colors.RESET}")
             est_new_size = int(orig_size * 0.45)
-            self.stats["transcoded"] += 1
-            self.stats["transcoded_orig_bytes"] += orig_size
-            self.stats["transcoded_new_bytes"] += est_new_size
-            self.stats["new_bytes"] += est_new_size
+            with self.stats_lock:
+                self.stats["transcoded"] += 1
+                self.stats["transcoded_orig_bytes"] += orig_size
+                self.stats["transcoded_new_bytes"] += est_new_size
+                self.stats["new_bytes"] += est_new_size
             return True
 
-        # Build execution command
-        cmd = self.build_ffmpeg_command(file_path, temp_output)
-        self.current_temp_output = temp_output
+        # Build FFmpeg execution command
+        cmd = self.build_ffmpeg_command(
+            file_path,
+            temp_output,
+            active_encoder=active_enc,
+            extra_args=extra_args,
+            subtitles=sub_list
+        )
+        self.current_temp_outputs.append(temp_output)
+
+        progress_bar = LevelProgressBar(
+            total_duration=info["duration"],
+            file_name=file_name,
+            file_idx=file_idx,
+            total_files=total_files,
+            engine_label=f"{engine_label}: {active_enc}",
+            style=self.bar_style,
+            print_lock=self.print_lock
+        )
 
         t_start = time.time()
+        stderr_lines = []
+
         try:
-            # Run FFmpeg
-            res = subprocess.run(cmd, check=True)
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                universal_newlines=True,
+                bufsize=1
+            )
+
+            def read_err():
+                for eline in proc.stderr:
+                    stderr_lines.append(eline.strip())
+
+            err_thread = threading.Thread(target=read_err, daemon=True)
+            err_thread.start()
+
+            # Read machine-readable FFmpeg progress pipe
+            cur_kv = {}
+            for line in proc.stdout:
+                line = line.strip()
+                if "=" in line:
+                    k, v = line.split("=", 1)
+                    cur_kv[k.strip()] = v.strip()
+                    if k.strip() == "progress":
+                        # Compute current playback seconds
+                        out_sec = 0.0
+                        if "out_time_us" in cur_kv and cur_kv["out_time_us"].lstrip("-").isdigit():
+                            out_sec = float(cur_kv["out_time_us"]) / 1_000_000.0
+                        elif "out_time_ms" in cur_kv and cur_kv["out_time_ms"].lstrip("-").isdigit():
+                            out_sec = float(cur_kv["out_time_ms"]) / 1_000.0
+                        elif "out_time" in cur_kv:
+                            parts = cur_kv["out_time"].split(":")
+                            if len(parts) == 3:
+                                try:
+                                    out_sec = float(parts[0]) * 3600 + float(parts[1]) * 60 + float(parts[2])
+                                except ValueError:
+                                    pass
+
+                        progress_bar.render(
+                            out_seconds=out_sec,
+                            speed_str=cur_kv.get("speed", "N/A"),
+                            fps_str=cur_kv.get("fps", "0"),
+                            bitrate_str=cur_kv.get("bitrate", "N/A"),
+                            current_bytes=int(cur_kv.get("total_size", 0)) if cur_kv.get("total_size", "").isdigit() else 0
+                        )
+
+            proc.wait()
+            err_thread.join(timeout=1.0)
             elapsed = time.time() - t_start
+
+            if proc.returncode != 0:
+                raise subprocess.CalledProcessError(proc.returncode, cmd, output="\n".join(stderr_lines))
+
+            progress_bar.finish()
 
             if not os.path.exists(temp_output) or os.path.getsize(temp_output) == 0:
                 raise RuntimeError("Output file was not created or is 0 bytes.")
 
             new_size = os.path.getsize(temp_output)
-            self.stats["new_bytes"] += new_size
-            self.stats["transcoded"] += 1
-            self.stats["transcoded_orig_bytes"] += orig_size
-            self.stats["transcoded_new_bytes"] += new_size
-
             saved_bytes = orig_size - new_size
             ratio_pct = (saved_bytes / orig_size) * 100.0 if orig_size > 0 else 0
 
-            # Atomic rename of temp file to target
+            with self.stats_lock:
+                self.stats["new_bytes"] += new_size
+                self.stats["transcoded"] += 1
+                self.stats["transcoded_orig_bytes"] += orig_size
+                self.stats["transcoded_new_bytes"] += new_size
+
+            # Atomic swap to target destination
             if file_path == final_output:
-                # Transcoding in-place: remove original first, then rename temp
                 os.remove(file_path)
             shutil.move(temp_output, final_output)
-            self.current_temp_output = None
+            if temp_output in self.current_temp_outputs:
+                self.current_temp_outputs.remove(temp_output)
 
-            # Delete original if input was .mkv, .avi, etc. and flag is set
+            # Optional delete original
             if self.delete_original and file_path != final_output:
                 try:
                     os.remove(file_path)
                 except OSError as e:
-                    print(f"  {Colors.YELLOW}Warning: Could not remove original: {e}{Colors.RESET}")
+                    with self.print_lock:
+                        print(f"  {Colors.YELLOW}Warning: Could not remove original: {e}{Colors.RESET}")
 
             # Reporting
             color = Colors.GREEN if saved_bytes > 0 else Colors.YELLOW
-            print(f"  {color}✔ Complete:{Colors.RESET} {format_bytes(orig_size)} ➔ {format_bytes(new_size)} ({ratio_pct:+.1f}%) in {format_duration(elapsed)}")
+            with self.print_lock:
+                print(f"  {color}✔ Complete:{Colors.RESET} {format_bytes(orig_size)} ➔ {format_bytes(new_size)} ({ratio_pct:+.1f}%) in {format_duration(elapsed)}")
             return True
 
-        except subprocess.CalledProcessError as e:
-            # If a hardware encoder failed mid-flight, attempt graceful CPU fallback
-            if self.encoder not in ("libx265", "libx264"):
-                print(f"  {Colors.YELLOW}⚠ Hardware encoder '{self.encoder}' failed (exit code {e.returncode}). Retrying with CPU fallback (libx265)...{Colors.RESET}")
+        except (subprocess.CalledProcessError, RuntimeError) as e:
+            # Automatic graceful fallback to CPU if GPU encoder failed mid-flight
+            if active_enc not in ("libx265", "libx264") and self.mode != "gpu":
+                with self.print_lock:
+                    print(f"  {Colors.YELLOW}⚠ Hardware encoder '{active_enc}' failed. Retrying with CPU fallback (libx265)...{Colors.RESET}")
                 if os.path.exists(temp_output):
-                    os.remove(temp_output)
+                    try:
+                        os.remove(temp_output)
+                    except Exception:
+                        pass
+                return self.transcode_file(
+                    file_path,
+                    file_idx=file_idx,
+                    total_files=total_files,
+                    worker_engine="libx265",
+                    worker_desc="Software CPU Fallback (libx265)"
+                )
+
+            with self.print_lock:
+                err_msg = "\n".join(stderr_lines[-5:]) if stderr_lines else str(e)
+                print(f"  {Colors.RED}✖ Error during transcoding: {err_msg}{Colors.RESET}")
+            if os.path.exists(temp_output):
                 try:
-                    fallback_cmd = self.build_ffmpeg_command(file_path, temp_output, force_cpu=True)
-                    subprocess.run(fallback_cmd, check=True)
-                    # Automatically downgrade future queue jobs to CPU to avoid re-failing broken hardware
-                    self.encoder = "libx265"
-                    self.hw_desc = "Software CPU Fallback (libx265)"
-                    elapsed = time.time() - t_start
-
-                    if not os.path.exists(temp_output) or os.path.getsize(temp_output) == 0:
-                        raise RuntimeError("Fallback output file was not created or is 0 bytes.")
-
-                    new_size = os.path.getsize(temp_output)
-                    self.stats["new_bytes"] += new_size
-                    self.stats["transcoded"] += 1
-                    self.stats["transcoded_orig_bytes"] += orig_size
-                    self.stats["transcoded_new_bytes"] += new_size
-
-                    saved_bytes = orig_size - new_size
-                    ratio_pct = (saved_bytes / orig_size) * 100.0 if orig_size > 0 else 0
-
-                    if file_path == final_output:
-                        os.remove(file_path)
-                    shutil.move(temp_output, final_output)
-                    self.current_temp_output = None
-
-                    if self.delete_original and file_path != final_output:
-                        try:
-                            os.remove(file_path)
-                        except OSError as ex:
-                            print(f"  {Colors.YELLOW}Warning: Could not remove original: {ex}{Colors.RESET}")
-
-                    color = Colors.GREEN if saved_bytes > 0 else Colors.YELLOW
-                    print(f"  {color}✔ Complete (CPU Fallback):{Colors.RESET} {format_bytes(orig_size)} ➔ {format_bytes(new_size)} ({ratio_pct:+.1f}%) in {format_duration(elapsed)}")
-                    return True
-                except Exception as fallback_err:
-                    print(f"  {Colors.RED}✖ CPU Fallback also failed: {fallback_err}{Colors.RESET}")
-
-            print(f"  {Colors.RED}✖ Error during transcoding: exit code {e.returncode}{Colors.RESET}")
-            if os.path.exists(temp_output):
-                os.remove(temp_output)
-            self.current_temp_output = None
-            self.stats["failed"] += 1
-            self.stats["new_bytes"] += orig_size
-            return False
-        except Exception as e:
-            print(f"  {Colors.RED}✖ Unexpected failure: {e}{Colors.RESET}")
-            if os.path.exists(temp_output):
-                os.remove(temp_output)
-            self.current_temp_output = None
-            self.stats["failed"] += 1
-            self.stats["new_bytes"] += orig_size
+                    os.remove(temp_output)
+                except Exception:
+                    pass
+            if temp_output in self.current_temp_outputs:
+                self.current_temp_outputs.remove(temp_output)
+            with self.stats_lock:
+                self.stats["failed"] += 1
+                self.stats["new_bytes"] += orig_size
             return False
 
     def scan_and_transcode(self, root_dir: str):
@@ -660,25 +1023,130 @@ class Transcoder:
 
         print(f"\n{Colors.BOLD}{'=' * 78}{Colors.RESET}")
         print(f" {Colors.GREEN}⚡ Batch Transcoding Queue:{Colors.RESET} {total} media candidate(s) found")
-        print(f" {Colors.CYAN}Hardware Engine:{Colors.RESET} {self.hw_desc} ({self.encoder})")
+        print(f" {Colors.CYAN}Hardware Strategy:{Colors.RESET} Mode: {self.mode.upper()} | Engine: {self.hw_desc} ({self.encoder})")
         print(f"{Colors.BOLD}{'=' * 78}{Colors.RESET}")
 
         interrupted = False
         try:
-            for idx, f in enumerate(target_files, 1):
-                print(f"\n[{idx}/{total}]", end="")
-                self.transcode_file(f)
+            if self.mode in ("both", "dual-gpu", "all") and total >= 2:
+                self.run_dual_engine_batch(target_files)
+            else:
+                for idx, f in enumerate(target_files, 1):
+                    self.transcode_file(f, file_idx=idx, total_files=total)
         except KeyboardInterrupt:
             interrupted = True
             print(f"\n\n{Colors.YELLOW}{Colors.BOLD}⚠ Transcoding canceled by user (Ctrl+C / Interrupt).{Colors.RESET}")
-            if self.current_temp_output and os.path.exists(self.current_temp_output):
-                try:
-                    os.remove(self.current_temp_output)
-                    print(f" {Colors.DIM}✔ Cleaned up incomplete temp file: {os.path.basename(self.current_temp_output)}{Colors.RESET}")
-                except Exception:
-                    pass
+            for tmp in list(self.current_temp_outputs):
+                if os.path.exists(tmp):
+                    try:
+                        os.remove(tmp)
+                        print(f" {Colors.DIM}✔ Cleaned up incomplete temp file: {os.path.basename(tmp)}{Colors.RESET}")
+                    except Exception:
+                        pass
         finally:
             self.print_summary(interrupted=interrupted)
+
+    def run_dual_engine_batch(self, target_files: List[str]):
+        """
+        High-Throughput Parallel Pipeline:
+        Dispatches transcoding jobs across Dual GPUs, GPU+CPU, or All hardware engines simultaneously.
+        """
+        total = len(target_files)
+        work_queue = queue.Queue()
+        for idx, f in enumerate(target_files, 1):
+            work_queue.put((idx, f))
+
+        def worker_loop(w_type: str, w_engine: str, w_desc: str, w_extra: List[str]):
+            while not work_queue.empty():
+                try:
+                    idx, file_path = work_queue.get_nowait()
+                except queue.Empty:
+                    break
+                try:
+                    self.transcode_file(
+                        file_path,
+                        file_idx=idx,
+                        total_files=total,
+                        worker_engine=w_engine,
+                        worker_desc=w_desc,
+                        extra_args=w_extra
+                    )
+                finally:
+                    work_queue.task_done()
+
+        # Discover GPUs
+        threads = []
+        try:
+            from gpu_detector import MultiGPUManager
+            mgr = MultiGPUManager()
+            all_devs = mgr.detect_all_devices()
+            gpu_cards = [d for d in all_devs if d.vendor != "CPU"]
+        except Exception:
+            gpu_cards = []
+
+        if self.mode == "dual-gpu" and len(gpu_cards) >= 2:
+            print(f"\n {Colors.MAGENTA}⚡ Simultaneous Dual-GPU Hardware Acceleration Active!{Colors.RESET}")
+            print(f"   • {Colors.GREEN}Worker 1 (GPU 0){Colors.RESET}: {gpu_cards[0].name} [{gpu_cards[0].encoder}]")
+            print(f"   • {Colors.CYAN}Worker 2 (GPU 1){Colors.RESET}: {gpu_cards[1].name} [{gpu_cards[1].encoder}]")
+            print(f"   • Dynamic Dispatch: 2 GPU cards transcoding simultaneously for max power...\n")
+
+            for i, card in enumerate(gpu_cards[:2]):
+                t = threading.Thread(
+                    target=worker_loop,
+                    args=(f"GPU-{i}", card.encoder, f"{card.name} [{card.encoder}]", card.extra_args),
+                    name=f"GPU-Worker-{i+1}"
+                )
+                t.daemon = True
+                t.start()
+                threads.append(t)
+
+        elif self.mode in ("both", "all"):
+            print(f"\n {Colors.MAGENTA}⚡ Multi-Engine Parallel Acceleration Active!{Colors.RESET}")
+            if gpu_cards:
+                for i, card in enumerate(gpu_cards[:2]):
+                    print(f"   • {Colors.GREEN}Worker {i+1} (GPU {i}){Colors.RESET}: {card.name} [{card.encoder}]")
+                    t = threading.Thread(
+                        target=worker_loop,
+                        args=(f"GPU-{i}", card.encoder, f"{card.name} [{card.encoder}]", card.extra_args),
+                        name=f"GPU-Worker-{i+1}"
+                    )
+                    t.daemon = True
+                    t.start()
+                    threads.append(t)
+            else:
+                t = threading.Thread(
+                    target=worker_loop,
+                    args=("GPU", self.encoder, self.hw_desc, []),
+                    name="GPU-Worker-1"
+                )
+                t.daemon = True
+                t.start()
+                threads.append(t)
+
+            print(f"   • {Colors.CYAN}CPU Companion Worker{Colors.RESET}: Multi-Threaded CPU (libx265 -threads {self.cpu_threads})")
+            t_cpu = threading.Thread(
+                target=worker_loop,
+                args=("CPU", "libx265", f"Multi-Threaded CPU (libx265 -threads {self.cpu_threads})", []),
+                name="CPU-Worker-1"
+            )
+            t_cpu.daemon = True
+            t_cpu.start()
+            threads.append(t_cpu)
+
+        else:
+            # Fallback single GPU worker + CPU workers
+            for i in range(self.gpu_workers):
+                t_gpu = threading.Thread(
+                    target=worker_loop,
+                    args=("GPU", self.encoder, self.hw_desc, []),
+                    name=f"GPU-Worker-{i+1}"
+                )
+                t_gpu.daemon = True
+                t_gpu.start()
+                threads.append(t_gpu)
+
+        for t in threads:
+            t.join()
 
     def print_summary(self, interrupted: bool = False):
         """Display final execution telemetry and comprehensive space saved."""
@@ -694,9 +1162,9 @@ class Transcoder:
         print(f"\n{Colors.BOLD}{'=' * 78}{Colors.RESET}")
         print(f" {banner_color}{Colors.BOLD}{banner_title}{Colors.RESET}")
         print(f"{Colors.BOLD}{'=' * 78}{Colors.RESET}")
-        
-        # File counters
+
         total_cand = self.stats["total_candidates"] if self.stats["total_candidates"] > 0 else self.stats["scanned"]
+        print(f" • Mode / Strategy:        {self.mode.upper()} ({self.hw_desc})")
         print(f" • Total Candidates:       {total_cand}")
         print(f" • Successfully Converted: {Colors.GREEN}{Colors.BOLD}{self.stats['transcoded']}{Colors.RESET}")
         print(f" • Skipped (Compliant):    {Colors.YELLOW}{self.stats['skipped']}{Colors.RESET}")
@@ -729,9 +1197,12 @@ class Transcoder:
         print(f"{Colors.BOLD}{'=' * 78}{Colors.RESET}\n")
 
 
+# ==============================================================================
+# 🚀 CLI Argument Parsing & Entry Point
+# ==============================================================================
 def parse_arguments():
     parser = argparse.ArgumentParser(
-        description="⚡ High-Performance GPU-Accelerated H.265 (HEVC) Media Transcoder",
+        description="⚡ High-Performance GPU/CPU/Dual-Engine H.265 (HEVC) Media Transcoder",
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument(
@@ -741,43 +1212,137 @@ def parse_arguments():
         help="Path to media directory or single video file"
     )
     parser.add_argument(
-        "--encoder",
-        choices=["auto", "hevc_nvenc", "hevc_qsv", "hevc_vaapi", "hevc_videotoolbox", "libx265", "libx264"],
-        default="auto",
-        help="Explicitly choose video encoder (default: auto hardware detection)"
+        "--gui",
+        action="store_true",
+        help="Launch the interactive Graphical User Interface (GUI) Studio with Level Progress Bars and Dual-GPU controls"
     )
-    parser.add_argument(
+
+    # Acceleration Modes
+    mode_group = parser.add_argument_group("Acceleration Strategy Options")
+    mode_group.add_argument(
+        "--mode",
+        choices=["auto", "gpu", "dual-gpu", "both", "all", "cpu"],
+        default="auto",
+        help="Transcoding hardware mode: 'dual-gpu' (simultaneously utilize both GPU cards), 'gpu' (single GPU), 'both'/'all' (GPU + CPU concurrent), 'cpu' (CPU software), or 'auto' (default)"
+    )
+    mode_group.add_argument(
+        "--dual-gpu",
+        dest="mode",
+        action="store_const",
+        const="dual-gpu",
+        help="Shorthand to force simultaneous Dual-GPU hardware transcoding across both video cards"
+    )
+    mode_group.add_argument(
+        "--gpu",
+        dest="mode",
+        action="store_const",
+        const="gpu",
+        help="Shorthand to force GPU hardware transcoding"
+    )
+    mode_group.add_argument(
+        "--cpu",
+        dest="mode",
+        action="store_const",
+        const="cpu",
+        help="Shorthand to force multi-threaded CPU software transcoding"
+    )
+    mode_group.add_argument(
+        "--both",
+        dest="mode",
+        action="store_const",
+        const="both",
+        help="Shorthand for dual-engine mode (runs GPU and CPU simultaneously for maximum conversion speed)"
+    )
+    mode_group.add_argument(
+        "--all",
+        dest="mode",
+        action="store_const",
+        const="all",
+        help="Shorthand to utilize all available hardware: both GPUs + CPU multithreading"
+    )
+
+    # Progress & Visual Options
+    visual_group = parser.add_argument_group("Progress & Visual Meter Options")
+    visual_group.add_argument(
+        "--bar-style",
+        choices=["level", "blocks", "ascii"],
+        default="level",
+        help="Visual style of the level progress bar: 'level' (▰▰▰▱▱ graduated), 'blocks' (███░░), or 'ascii' (default: level)"
+    )
+
+    # Encoder & Quality Options
+    enc_group = parser.add_argument_group("Encoding Quality & Tuning")
+    enc_group.add_argument(
+        "--encoder",
+        choices=["auto", "hevc_nvenc", "hevc_qsv", "hevc_vaapi", "hevc_videotoolbox", "hevc_amf", "libx265", "libx264"],
+        default="auto",
+        help="Explicitly choose video encoder (default: auto detection based on mode)"
+    )
+    enc_group.add_argument(
         "--cq",
         type=int,
         default=24,
         help="Constant Quality / CRF level (18=near lossless, 24=optimal balance, 28=smaller; default: 24)"
     )
-    parser.add_argument(
+    enc_group.add_argument(
         "--preset",
         default="p4",
-        help="Encoder speed preset (NVENC: p1-p7 or medium/fast; default: p4)"
+        help="Encoder speed preset (NVENC: p1-p7 or medium/fast; CPU: ultrafast-veryslow; default: p4)"
     )
-    parser.add_argument(
+    enc_group.add_argument(
+        "--cpu-threads",
+        type=int,
+        default=0,
+        help="Number of threads for CPU encoding (default: 0 = all logical cores)"
+    )
+    enc_group.add_argument(
+        "--gpu-workers",
+        type=int,
+        default=1,
+        help="Number of parallel GPU workers in 'both' mode (default: 1)"
+    )
+    enc_group.add_argument(
+        "--cpu-workers",
+        type=int,
+        default=1,
+        help="Number of parallel CPU workers in 'both' mode (default: 1)"
+    )
+    enc_group.add_argument(
+        "--hwaccel",
+        choices=["auto", "cuda", "qsv", "vaapi", "d3d11va", "videotoolbox", "none"],
+        default="auto",
+        help="Hardware decoding acceleration API (default: auto)"
+    )
+
+    # File & Batch Options
+    file_group = parser.add_argument_group("File & Safety Options")
+    file_group.add_argument(
         "--delete-original",
         action="store_true",
         help="Delete original source file when output is a different format (.mkv ➔ .mp4)"
     )
-    parser.add_argument(
+    file_group.add_argument(
         "--overwrite",
         action="store_true",
         help="Overwrite existing output .mp4 file if one exists"
     )
-    parser.add_argument(
+    file_group.add_argument(
         "--re-encode-hevc",
         action="store_true",
         help="Re-encode videos that are already H.265 (default: skipped to preserve quality and save time)"
     )
-    parser.add_argument(
+    file_group.add_argument(
+        "--container",
+        choices=["auto", "same", "mp4", "mkv"],
+        default="auto",
+        help="Target container format: 'auto'/'same' (preserves .mkv for .mkv and .mp4 for .mp4, keeping full subtitles), 'mp4', or 'mkv' (default: auto)"
+    )
+    file_group.add_argument(
         "--device",
         default=None,
         help="Explicit DRM render node for Intel Arc / iGPU (e.g. /dev/dri/renderD128, /dev/dri/renderD129; default: auto-detected)"
     )
-    parser.add_argument(
+    file_group.add_argument(
         "--dry-run",
         action="store_true",
         help="Scan and display planned transcode actions without running ffmpeg"
@@ -789,26 +1354,43 @@ def parse_arguments():
 def main():
     args = parse_arguments()
 
+    # GUI Studio Launch
+    if args.gui or (not args.path and sys.stdin.isatty() and len(sys.argv) == 1 and os.environ.get("DISPLAY") or os.name == "nt" and len(sys.argv) == 1):
+        try:
+            from transcode_gui import main as gui_main
+            gui_main()
+            return
+        except Exception as e:
+            # If graphical display is not available, fall through to CLI prompt
+            pass
+
     # Check ffmpeg & ffprobe availability
-    if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
-        print(f"{Colors.RED}Error: FFmpeg or FFprobe is not installed or not in PATH.{Colors.RESET}")
-        print(f"Please install FFmpeg: sudo apt install -y ffmpeg (Linux) or brew install ffmpeg (macOS)")
+    ffmpeg_bin = get_binary_path("ffmpeg")
+    ffprobe_bin = get_binary_path("ffprobe")
+    if not shutil.which(ffmpeg_bin) and not os.path.isfile(ffmpeg_bin):
+        print(f"{Colors.RED}Error: FFmpeg is not installed or not in PATH.{Colors.RESET}")
+        print("Please install FFmpeg: sudo apt install -y ffmpeg (Linux), brew install ffmpeg (macOS), or winget install Gyan.FFmpeg (Windows)")
         sys.exit(1)
 
-    # Detect hardware acceleration and GPU device
+    # Detect hardware acceleration and GPU device based on chosen mode
     preferred_enc = None if args.encoder == "auto" else args.encoder
-    encoder, hw_desc, device_node = HardwareDetector.detect_best_encoder(preferred_enc, args.device)
+    encoder, hw_desc, device_node = HardwareDetector.detect_best_encoder(
+        preferred_encoder=preferred_enc,
+        preferred_device=args.device,
+        mode=args.mode
+    )
 
     print(f"\n{Colors.BOLD}{Colors.CYAN}⚡ FFmpeg H.265 (HEVC) Media Transcoder{Colors.RESET}")
     dev_str = f" {Colors.DIM}(Device: {device_node}){Colors.RESET}" if device_node else ""
-    print(f"Auto-Detected Engine: {Colors.GREEN}{hw_desc}{Colors.RESET} [{encoder}]{dev_str}")
+    print(f"Selected Mode:   {Colors.YELLOW}{args.mode.upper()}{Colors.RESET}")
+    print(f"Selected Engine: {Colors.GREEN}{hw_desc}{Colors.RESET} [{encoder}]{dev_str}")
+    print(f"Progress Bar:    {Colors.CYAN}Level Progress Bar ({args.bar_style}){Colors.RESET}")
 
     # Path acquisition
     target_path = args.path
     if not target_path:
         while True:
             inp = input("\nEnter path to media directory or video file: ").strip()
-            # Handle quoted paths (drag-and-drop in terminals)
             inp = inp.strip("\"'")
             if os.path.exists(inp):
                 target_path = inp
@@ -819,11 +1401,18 @@ def main():
         encoder=encoder,
         hw_desc=hw_desc,
         device=device_node,
+        mode=args.mode,
         cq=args.cq,
         preset=args.preset,
+        cpu_threads=args.cpu_threads,
+        gpu_workers=args.gpu_workers,
+        cpu_workers=args.cpu_workers,
+        hwaccel=args.hwaccel,
+        bar_style=args.bar_style,
         overwrite=args.overwrite,
         delete_original=args.delete_original,
         skip_hevc=not args.re_encode_hevc,
+        container=args.container,
         dry_run=args.dry_run
     )
 
@@ -839,12 +1428,13 @@ def main():
             sys.exit(1)
     except KeyboardInterrupt:
         print(f"\n\n{Colors.YELLOW}{Colors.BOLD}⚠ Transcoding canceled by user (Ctrl+C / Interrupt).{Colors.RESET}")
-        if transcoder.current_temp_output and os.path.exists(transcoder.current_temp_output):
-            try:
-                os.remove(transcoder.current_temp_output)
-                print(f" {Colors.DIM}✔ Cleaned up incomplete temp file: {os.path.basename(transcoder.current_temp_output)}{Colors.RESET}")
-            except Exception:
-                pass
+        for tmp in list(transcoder.current_temp_outputs):
+            if os.path.exists(tmp):
+                try:
+                    os.remove(tmp)
+                    print(f" {Colors.DIM}✔ Cleaned up incomplete temp file: {os.path.basename(tmp)}{Colors.RESET}")
+                except Exception:
+                    pass
         transcoder.print_summary(interrupted=True)
 
 

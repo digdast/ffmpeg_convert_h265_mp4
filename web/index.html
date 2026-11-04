@@ -278,38 +278,42 @@
       </div>
       <div class="terminal-body">
 <span class="term-bold term-cyan">⚡ FFmpeg H.265 (HEVC) Media Transcoder</span>
-Detected Engine: <span class="term-green">NVIDIA NVENC (GPU)</span> [hevc_nvenc]
+Selected Mode:   <span class="term-yellow">BOTH (Dual-Engine Parallel GPU + CPU Acceleration)</span>
+Selected Engine: <span class="term-green">NVIDIA NVENC (GPU)</span> [hevc_nvenc] + <span class="term-cyan">Multi-Threaded CPU</span> [libx265]
+Progress Bar:    <span class="term-cyan">Graduated Level Progress Bar (level)</span>
 
 ==============================================================================
 <span class="term-green">⚡ Batch Transcoding Queue:</span> 14 media candidate(s) found
-<span class="term-cyan">Hardware Engine:</span> NVIDIA NVENC (GPU) (hevc_nvenc)
+<span class="term-cyan">Hardware Strategy:</span> Mode: BOTH | Engine: NVIDIA NVENC [RTX 3060] + CPU [16 Threads]
 ==============================================================================
 
-[1/14] <span class="term-dim">✔ [COMPLIANT] Already H.265/MP4:</span> <span class="term-cyan">Oppenheimer.2023.2160p.mp4</span>
+<span class="term-magenta">⚡ Dual-Engine Parallel Acceleration Active!</span>
+  • Worker 1 (GPU): Dedicated ASIC (NVIDIA NVENC [RTX 3060])
+  • Worker 2 (CPU): Multi-Threaded CPU (libx265 -threads 16)
+  • Concurrent Queue: Dynamically dispatching 14 file(s) across both silicon blocks...
 
-[2/14]
-<span class="term-bold">▶ Transcoding:</span> <span class="term-cyan">Dune.Part.Two.2024.1080p.mkv</span>
-  Source: H264 1920x1080 | 11.4 GB
-  Engine: <span class="term-green">NVIDIA NVENC (GPU)</span> (CQ/CRF: 24)
+▶ <span class="term-bold">Transcoding:</span> <span class="term-cyan">Dune.Part.Two.2024.1080p.mkv</span> [1/14]
+  Source: H264 1920x1080 | 11.4 GB | 02:46:12
+  Engine: <span class="term-green">NVIDIA NVENC (GPU)</span> (CQ/CRF: 24) [Mode: BOTH]
+  <span class="term-dim">[Queue 1/14 | LVL 1/10]</span> <span class="term-cyan">[GPU: hevc_nvenc]</span> Level: [<span class="term-green">▰▰▰▰▰▰▰▰▰▰▰▰</span><span class="term-dim">▱▱▱▱▱▱▱▱</span>] <span class="term-green">62.4%</span> <span class="term-yellow">[LVL 7/10]</span> <span class="term-green">⚡ 14.8x</span> | 355 fps | ETA: 04:15 | 01:43:42/02:46:12
   <span class="term-green">✔ Complete:</span> 11.4 GB ➔ 4.2 GB (+63.1%) in 04m 12s
 
-[3/14]
-<span class="term-bold">▶ Transcoding:</span> <span class="term-cyan">The.Matrix.1999.Remux.mkv</span>
-  Source: VC1 1920x1080 | 18.2 GB
-  Engine: <span class="term-green">NVIDIA NVENC (GPU)</span> (CQ/CRF: 24)
-  <span class="term-green">✔ Complete:</span> 18.2 GB ➔ 6.1 GB (+66.4%) in 06m 45s
+▶ <span class="term-bold">Transcoding:</span> <span class="term-cyan">The.Matrix.1999.Remux.mkv</span> [2/14]
+  Source: VC1 1920x1080 | 18.2 GB | 02:16:00
+  Engine: <span class="term-cyan">Multi-Threaded CPU (libx265)</span> (CQ/CRF: 24) [Mode: BOTH]
+  <span class="term-dim">[Queue 2/14 | LVL 2/10]</span> <span class="term-cyan">[CPU: libx265]</span>   Level: [<span class="term-yellow">▰▰▰▰▰▰▰▰</span><span class="term-dim">▱▱▱▱▱▱▱▱▱▱▱▱</span>] <span class="term-yellow">41.5%</span> <span class="term-yellow">[LVL 5/10]</span> <span class="term-green">⚡ 2.4x</span>  |  58 fps | ETA: 18:30 | 00:56:26/02:16:00
+  <span class="term-green">✔ Complete:</span> 18.2 GB ➔ 6.1 GB (+66.4%) in 08m 45s
 
 ==============================================================================
 <span class="term-green">✨ Transcoding Batch Summary</span>
 ==============================================================================
- • Total Scanned:      14
- • Transcoded:         <span class="term-green">12</span>
- • Skipped:            <span class="term-yellow">2</span>
- • Failed:             0
- • Original Footprint: 84.6 GB
- • Modern Footprint:   31.2 GB
- • Space Savings:      <span class="term-bold term-green">53.4 GB (+63.1%)</span>
- • Total Elapsed:      42m 18s
+ • Mode / Strategy:        BOTH (Dual-Engine Parallel Acceleration)
+ • Total Scanned:          14
+ • Successfully Converted: <span class="term-green">14</span>
+ • Original Footprint:     84.6 GB
+ • Modern H.265 Space:     31.2 GB
+ • Space Savings:          <span class="term-bold term-green">✔ 53.4 GB (63.1% SAVED)</span>
+ • Total Batch Runtime:    19m 40s (2.1x faster via dual GPU+CPU concurrency)
 ==============================================================================
       </div>
     </div>
@@ -359,13 +363,22 @@ python3 transcode_media.py /path/to/media/library
         <button class="btn-secondary" style="padding: 0.2rem 0.6rem; font-size: 0.75rem;" onclick="copyCode(this, 'code2')">Copy</button>
       </div>
       <div class="terminal-body" id="code2">
-<span class="term-dim"># Force NVIDIA NVENC with high visual quality (CQ 20)</span>
+<span class="term-dim"># 1. Maximum Speed: Dual-Engine parallel GPU + CPU conversion</span>
+python3 transcode_media.py /data/movies --both
+
+<span class="term-dim"># 2. Force hardware GPU transcoding with custom level progress bar</span>
+python3 transcode_media.py /data/movies --gpu --bar-style level
+
+<span class="term-dim"># 3. Force multi-threaded CPU software encoding</span>
+python3 transcode_media.py /data/movies --cpu --cpu-threads 16
+
+<span class="term-dim"># 4. Explicitly force NVIDIA NVENC with high visual quality (CQ 20)</span>
 python3 transcode_media.py /data/movies --encoder hevc_nvenc --cq 20
 
-<span class="term-dim"># Dry-run preview without touching files</span>
+<span class="term-dim"># 5. Dry-run preview without touching files</span>
 python3 transcode_media.py /data/movies --dry-run
 
-<span class="term-dim"># Transcode and clean up original MKV files upon success</span>
+<span class="term-dim"># 6. Transcode and clean up original MKV files upon success</span>
 python3 transcode_media.py /data/downloads --delete-original
       </div>
     </div>
