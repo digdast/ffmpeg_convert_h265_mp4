@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ffmpeg-h265-transcoder"
+version = "2.0.0"
+description = "GPU-Accelerated H.265 (HEVC) & MP4 Batch Media Transcoder with Multi-GPU Studio GUI (NVENC, QSV, AMF, VideoToolbox, VAAPI & Dual-Engine CPU+GPU)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [
+    { name = "Efrain Rivas", email = "admin@ertechlab.com" }
+]
+keywords = ["ffmpeg", "h265", "hevc", "nvenc", "qsv", "transcoder", "gpu", "mp4", "plex"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Environment :: Win32 (MS Windows)",
+    "Environment :: X11 Applications",
+    "Intended Audience :: System Administrators",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Video :: Conversion",
+]
+
+[project.optional-dependencies]
+remote = ["paramiko>=3.0.0"]
+
+[project.urls]
+Homepage = "https://ffmpeg.ertechlab.com"
+Documentation = "https://ffmpeg.ertechlab.com/install.html"
+Repository = "https://github.com/digdast/ffmpeg_convert_h265_mp4"
+
+[project.scripts]
+transcode-media = "transcode_media:main"
+ffmpeg-convert = "transcode_media:main"
+gpu-monitor = "gpu_monitor:main"
+
+[project.gui-scripts]
+transcode-gui = "transcode_gui:main"
+
+[tool.setuptools]
+py-modules = [
+    "transcode_media",
+    "transcode_gui",
+    "gpu_detector",
+    "gpu_monitor",
+    "remote_engine",
+]

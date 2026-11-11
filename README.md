@@ -90,29 +90,40 @@ flowchart TD
 
 ---
 
-## ⚡ 1-Line Cross-Platform Installers
+## ⚡ 1-Line Cross-Platform Installers & Packages
 
-Install `transcode-media` and alias `ffmpeg-convert` globally in seconds:
+Install `transcode-media`, `ffmpeg-convert`, `transcode-gui` (Multi-GPU Studio), and `gpu-monitor` globally in seconds:
 
-### 🐧 Linux & 🍎 macOS (curl)
-```bash
-curl -fsSL https://ffmpeg.ertechlab.com/install.sh | bash
-```
-*Or via raw GitHub:*
-```bash
-curl -fsSL https://raw.githubusercontent.com/digdast/ffmpeg_convert_h265_mp4/main/install.sh | bash
-```
-
-### 🪟 Windows (PowerShell)
+### 🪟 Windows (PowerShell, CMD & Standalone `.exe` Package)
+**PowerShell (5.1 & 7+):**
 ```powershell
 irm https://ffmpeg.ertechlab.com/install.ps1 | iex
 ```
-*Or via raw GitHub:*
+**CMD / Windows Terminal (ExecutionPolicy Bypass):**
+```cmd
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://ffmpeg.ertechlab.com/install.ps1 | iex"
+```
+**Windows Setup Package (`.exe` GUI Wizard or Silent `/S`):**
+- Direct Download: [`FFmpeg-Transcoder-Setup-x64.exe`](https://ffmpeg.ertechlab.com/downloads/FFmpeg-Transcoder-Setup-x64.exe) | [`FFmpeg-Transcoder-Windows-Portable.zip`](https://ffmpeg.ertechlab.com/downloads/FFmpeg-Transcoder-Windows-Portable.zip)
 ```powershell
-irm https://raw.githubusercontent.com/digdast/ffmpeg_convert_h265_mp4/main/install.ps1 | iex
+irm https://ffmpeg.ertechlab.com/downloads/FFmpeg-Transcoder-Setup-x64.exe -OutFile "$env:TEMP\FFmpeg-Setup.exe"; Start-Process -Wait "$env:TEMP\FFmpeg-Setup.exe" -ArgumentList "/S"
 ```
 
-> 📖 **Full Documentation & Interactive Web Guide**: Visit the live [Installation & Usage Guide](https://ffmpeg.ertechlab.com/install.html).
+### 🐧 Linux & 🍎 macOS (`curl` & `.deb` Package)
+```bash
+curl -fsSL https://ffmpeg.ertechlab.com/install.sh | bash
+```
+**Debian / Ubuntu / Proxmox `.deb` Package:**
+```bash
+curl -fsSL https://ffmpeg.ertechlab.com/downloads/ffmpeg-transcoder_2.0.0_all.deb -o /tmp/ffmpeg-transcoder.deb && sudo apt install -y /tmp/ffmpeg-transcoder.deb
+```
+
+### 🐍 Python Package (`pip` / `pipx`)
+```bash
+pip install https://ffmpeg.ertechlab.com/downloads/ffmpeg_h265_transcoder-2.0.0-py3-none-any.whl
+```
+
+> 📖 **Full Documentation, Checksums & Interactive Web Guide**: Visit [ffmpeg.ertechlab.com/install.html](https://ffmpeg.ertechlab.com/install.html).
 
 ---
 
@@ -201,6 +212,32 @@ python3 transcode_media.py /data/media/downloads --delete-original
 | `--overwrite` | Flag | `False` | Overwrites existing output MP4 file if already present. |
 | `--re-encode-hevc` | Flag | `False` | Forces re-encoding even if the file is already encoded in H.265. |
 | `--dry-run` | Flag | `False` | Simulates the transcode pipeline and outputs estimated space savings. |
+
+---
+
+## 🎬 Interactive GUI Studio with Remote Computer & NAS Support
+
+The suite features an interactive, high-performance GUI (`transcode_gui.py`):
+```bash
+python transcode_media.py --gui
+# or on Windows: double-click Launch_Transcoder_GUI.bat
+```
+
+### Key GUI Highlights:
+1. **Target Environment Selector**:
+   - **Local Machine**: Automatically uses your local dual GPUs (NVIDIA NVENC, Intel UHD/Iris QSV, AMD AMF, CPU).
+   - **Remote Computer / NAS (SSH)**: Connect to any remote server (e.g. Proxmox `192.168.0.31`, Media VM `192.168.0.19`, or TrueNAS `192.168.0.3`).
+2. **Direct Remote NAS Execution (Zero Network Bottlenecks)**:
+   - Encodes directly on the remote server's silicon against mounted NAS storage (e.g. `/data/media/tv-shows`, `/mnt/user/data/media`).
+   - Does NOT transfer raw media files over your local network.
+   - Automatically provisions and syncs the transcode worker scripts to `/tmp/` on the remote host.
+3. **Smooth Graduated Level Progress Bars & Live Telemetry**:
+   - 10-level graduated progress bar (`[LVL 1/10]` to `[LVL MAX]`).
+   - Streams live speed multipliers (`⚡ 14.2x`), encoding FPS, bitrate, elapsed time, and dynamic ETA over the SSH channel directly into the GUI.
+4. **Remote Directory Explorer & Queue Manager**:
+   - 1-click scan for remote NAS directories and media candidates.
+   - Smart skip for already-compliant H.265 files and lossless container preservation (`--container auto`).
+   - Profile persistence (`~/.ffmpeg_gui_remote.json`) to remember your favorite homelab hosts.
 
 ---
 

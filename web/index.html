@@ -24,6 +24,21 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="css/style.css">
+  <!-- Security Hardening & CSP (Optimized for AdSense & Performance) -->
+  <meta http-equiv="X-Content-Type-Options" content="nosniff">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+  <meta http-equiv="Permissions-Policy" content="camera=(), microphone=(), geolocation=()">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob: https:; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://pagead2.googlesyndication.com https://*.googlesyndication.com https://*.google.com https://*.doubleclick.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self' https://pagead2.googlesyndication.com https://ep1.adtrafficquality.google https://googleads.g.doubleclick.net https://*.google.com https://*.googlesyndication.com; frame-src 'self' https://googleads.g.doubleclick.net https://tpc.googlesyndication.com https://pagead2.googlesyndication.com https://*.google.com; child-src 'self' blob: https:;">
+
+  <!-- Google AdSense with Page-Level Auto-Ads -->
+  <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-1596056523034714"
+     crossorigin="anonymous"></script>
+  <script>
+    (adsbygoogle = window.adsbygoogle || []).push({
+      google_ad_client: "ca-pub-1596056523034714",
+      enable_page_level_ads: true
+    });
+  </script>
 </head>
 <body>
 
@@ -62,11 +77,14 @@
       <a href="install.html" class="btn-primary">
         <span>⚡ 1-Line Quick Install</span>
       </a>
-      <a href="#calculator" class="btn-secondary">
-        <span>ROI Storage Calculator</span>
+      <a href="downloads/FFmpeg-Transcoder-Setup-x64.exe" download class="btn-secondary" style="border-color: var(--cyan); color: var(--cyan);">
+        <span>📦 Windows Setup (.exe)</span>
       </a>
-      <a href="https://github.com/digdast/ffmpeg_convert_h265_mp4" target="_blank" class="btn-secondary">
-        <span>View on GitHub (digdast) ↗</span>
+      <a href="install.html#packages" class="btn-secondary">
+        <span>All Packages (.deb / .zip / pip)</span>
+      </a>
+      <a href="#calculator" class="btn-secondary">
+        <span>ROI Calculator</span>
       </a>
     </div>
   </header>
@@ -327,18 +345,72 @@ Progress Bar:    <span class="term-cyan">Graduated Level Progress Bar (level)</s
       <p class="section-subtitle">Cross-platform 1-line installation or direct repository execution. <a href="install.html" style="color:var(--cyan); text-decoration:underline;">View Complete Install & Usage Guide ↗</a></p>
     </div>
 
+    <!-- Direct Package Downloads Row -->
+    <div class="pkg-grid" style="margin-top: 0;">
+      <div class="pkg-card featured">
+        <div>
+          <div class="pkg-badge-row">
+            <span class="pkg-os-tag">🪟 Windows x64</span>
+            <span class="pkg-ver">v2.0.0</span>
+          </div>
+          <div class="pkg-title">Windows Setup (.exe) & Portable</div>
+          <p class="pkg-desc">GUI setup wizard + silent <code>/S</code> terminal install, PATH shims, and Studio GUI.</p>
+        </div>
+        <div class="pkg-actions">
+          <a href="downloads/FFmpeg-Transcoder-Setup-x64.exe" download class="btn-dl">⬇ Setup (.exe)</a>
+          <a href="downloads/FFmpeg-Transcoder-Windows-Portable.zip" download class="btn-dl-alt">.zip</a>
+        </div>
+      </div>
+
+      <div class="pkg-card">
+        <div>
+          <div class="pkg-badge-row">
+            <span class="pkg-os-tag">🐧 Debian / Ubuntu</span>
+            <span class="pkg-ver">v2.0.0</span>
+          </div>
+          <div class="pkg-title">Linux Debian Package (.deb)</div>
+          <p class="pkg-desc">Native <code>apt</code> package installing CLI & Studio GUI to <code>/usr/local/bin</code>.</p>
+        </div>
+        <div class="pkg-actions">
+          <a href="downloads/ffmpeg-transcoder_2.0.0_all.deb" download class="btn-dl">⬇ Package (.deb)</a>
+          <a href="downloads/ffmpeg-transcoder-linux-x64.tar.gz" download class="btn-dl-alt">.tar.gz</a>
+        </div>
+      </div>
+
+      <div class="pkg-card">
+        <div>
+          <div class="pkg-badge-row">
+            <span class="pkg-os-tag">🐍 Python 3.9+</span>
+            <span class="pkg-ver">PEP 427</span>
+          </div>
+          <div class="pkg-title">Python Wheel (pip / pipx)</div>
+          <p class="pkg-desc">Universal cross-platform package with OS entry-point executables.</p>
+        </div>
+        <div class="pkg-actions">
+          <a href="downloads/ffmpeg_h265_transcoder-2.0.0-py3-none-any.whl" download class="btn-dl">⬇ Wheel (.whl)</a>
+          <a href="downloads/SHA256SUMS.txt" target="_blank" class="btn-dl-alt">SHA256</a>
+        </div>
+      </div>
+    </div>
+
     <!-- 1-Line Fast Install -->
     <div class="terminal-card" style="margin-bottom: 2rem;">
       <div class="terminal-header">
-        <div class="terminal-title">⚡ Instant 1-Line Install (Linux & macOS via curl | Windows via PowerShell)</div>
-        <button class="btn-secondary" style="padding: 0.2rem 0.6rem; font-size: 0.75rem;" onclick="copyCode(this, 'code0')">Copy</button>
+        <div class="terminal-title">⚡ Instant 1-Line Terminal Install (Windows PowerShell / CMD | Linux & macOS | pip)</div>
+        <button class="btn-secondary" style="padding: 0.2rem 0.6rem; font-size: 0.75rem;" onclick="copyText(this, 'irm https://ffmpeg.ertechlab.com/install.ps1 | iex')">Copy Windows PS</button>
       </div>
       <div class="terminal-body" id="code0">
+<span class="term-dim"># Windows PowerShell (5.1 &amp; 7+)</span>
+irm https://ffmpeg.ertechlab.com/install.ps1 | iex
+
+<span class="term-dim"># Windows CMD / Terminal (ExecutionPolicy Bypass)</span>
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://ffmpeg.ertechlab.com/install.ps1 | iex"
+
 <span class="term-dim"># Linux / macOS (curl)</span>
 curl -fsSL https://ffmpeg.ertechlab.com/install.sh | bash
 
-<span class="term-dim"># Windows (PowerShell)</span>
-irm https://ffmpeg.ertechlab.com/install.ps1 | iex
+<span class="term-dim"># Python Package (pip / pipx)</span>
+pip install https://ffmpeg.ertechlab.com/downloads/ffmpeg_h265_transcoder-2.0.0-py3-none-any.whl
       </div>
     </div>
 
@@ -383,6 +455,22 @@ python3 transcode_media.py /data/downloads --delete-original
       </div>
     </div>
   </section>
+
+  <!-- Google AdSense Responsive Display Unit -->
+  <div style="max-width: 1120px; margin: 1.75rem auto; padding: 0 1.5rem;">
+    <div style="background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 12px; padding: 0.85rem 1rem; text-align: center; overflow: hidden;">
+      <div style="font-family: monospace; font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.14em; color: #64748b; margin-bottom: 0.45rem;">Sponsored GPU &amp; Media Infrastructure Partners</div>
+      <ins class="adsbygoogle"
+           style="display:block; min-height:90px;"
+           data-ad-client="ca-pub-1596056523034714"
+           data-ad-slot="auto"
+           data-ad-format="auto"
+           data-full-width-responsive="true"></ins>
+      <script>
+        (adsbygoogle = window.adsbygoogle || []).push({});
+      </script>
+    </div>
+  </div>
 
   <!-- Footer -->
   <footer>

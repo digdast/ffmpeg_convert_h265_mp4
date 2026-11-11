@@ -10,6 +10,21 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%2338bdf8'><path d='M13 2L3 14h9l-1 8 10-12h-9l1-8z'/></svg>">
+  <!-- Security Hardening & CSP (Optimized for AdSense & Performance) -->
+  <meta http-equiv="X-Content-Type-Options" content="nosniff">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+  <meta http-equiv="Permissions-Policy" content="camera=(), microphone=(), geolocation=()">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob: https:; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://pagead2.googlesyndication.com https://*.googlesyndication.com https://*.google.com https://*.doubleclick.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self' https://pagead2.googlesyndication.com https://ep1.adtrafficquality.google https://googleads.g.doubleclick.net https://*.google.com https://*.googlesyndication.com; frame-src 'self' https://googleads.g.doubleclick.net https://tpc.googlesyndication.com https://pagead2.googlesyndication.com https://*.google.com; child-src 'self' blob: https:;">
+
+  <!-- Google AdSense with Page-Level Auto-Ads -->
+  <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-1596056523034714"
+     crossorigin="anonymous"></script>
+  <script>
+    (adsbygoogle = window.adsbygoogle || []).push({
+      google_ad_client: "ca-pub-1596056523034714",
+      enable_page_level_ads: true
+    });
+  </script>
 </head>
 <body>
 
@@ -33,36 +48,183 @@
 
   <!-- Hero Section -->
   <header class="hero" style="padding: 4rem 1.5rem 2rem;">
-    <div class="hero-badge">⚡ Instant Deployment</div>
+    <div class="hero-badge">⚡ v2.0.0 Packages & Instant Terminal Install</div>
     <h1 class="hero-title" style="font-size: 2.75rem;">
-      Cross-Platform <span class="text-gradient">1-Line Installer</span> & Usage Guide
+      Official <span class="text-gradient">Packages, 1-Line Installers</span> & Usage Guide
     </h1>
-    <p class="hero-subtitle" style="max-width: 800px;">
-      Deploy <code style="color:var(--cyan); font-family:var(--font-mono);">transcode-media</code> across Linux, macOS, and Windows in seconds via curl or PowerShell. Complete with automatic hardware GPU detection and safety mechanisms.
+    <p class="hero-subtitle" style="max-width: 820px;">
+      Install <code style="color:var(--cyan); font-family:var(--font-mono);">transcode-media</code> CLI and the Multi-GPU <code style="color:var(--cyan); font-family:var(--font-mono);">transcode-gui</code> Studio via native Windows <code>.exe</code> / Debian <code>.deb</code> / Python <code>pip</code> packages, or deploy in one line via PowerShell, CMD, or curl.
     </p>
   </header>
 
   <!-- Main Container -->
-  <main class="container" style="max-width: 1100px; margin: 0 auto; padding: 1rem 1.5rem 5rem;">
+  <main class="container" style="max-width: 1120px; margin: 0 auto; padding: 1rem 1.5rem 5rem;">
+
+    <!-- Direct Download Packages Grid -->
+    <section id="packages" style="margin-bottom: 2.5rem;">
+      <div style="display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 0.75rem;">
+        <div>
+          <h2 style="font-size: 1.45rem; font-weight: 800;">📦 Direct Package Downloads (v2.0.0)</h2>
+          <p style="font-size: 0.9rem; color: var(--text-muted);">Standalone installers and portable archives — includes CLI pipeline, Multi-GPU Studio GUI, and live GPU telemetry.</p>
+        </div>
+        <a href="downloads/SHA256SUMS.txt" target="_blank" class="btn-dl-alt" style="font-family: var(--font-mono); font-size: 0.78rem;">
+          🔐 SHA256SUMS.txt
+        </a>
+      </div>
+
+      <div class="pkg-grid">
+        <!-- Card 1: Windows Setup EXE -->
+        <div class="pkg-card featured">
+          <div>
+            <div class="pkg-badge-row">
+              <span class="pkg-os-tag">🪟 Windows x64</span>
+              <span class="pkg-ver">v2.0.0 • .EXE / .ZIP</span>
+            </div>
+            <div class="pkg-title">Windows Setup Wizard & CLI</div>
+            <p class="pkg-desc">Native x64 installer with GUI setup wizard, silent <code>/S</code> terminal mode, automatic User PATH registration, and Start Menu shortcut.</p>
+          </div>
+          <div class="pkg-actions">
+            <a href="downloads/FFmpeg-Transcoder-Setup-x64.exe" download class="btn-dl">⬇ Setup (.exe)</a>
+            <a href="downloads/FFmpeg-Transcoder-Windows-Portable.zip" download class="btn-dl-alt">Portable (.zip)</a>
+          </div>
+        </div>
+
+        <!-- Card 2: Debian / Ubuntu DEB -->
+        <div class="pkg-card">
+          <div>
+            <div class="pkg-badge-row">
+              <span class="pkg-os-tag">🐧 Debian / Ubuntu</span>
+              <span class="pkg-ver">v2.0.0 • .DEB</span>
+            </div>
+            <div class="pkg-title">Linux Debian Package</div>
+            <p class="pkg-desc">Installs to <code>/opt/ffmpeg-transcoder</code> with global binaries in <code>/usr/local/bin</code> and desktop launcher entry.</p>
+          </div>
+          <div class="pkg-actions">
+            <a href="downloads/ffmpeg-transcoder_2.0.0_all.deb" download class="btn-dl">⬇ Package (.deb)</a>
+            <a href="downloads/ffmpeg-transcoder-linux-x64.tar.gz" download class="btn-dl-alt">.tar.gz</a>
+          </div>
+        </div>
+
+        <!-- Card 3: Python Wheel / pip -->
+        <div class="pkg-card">
+          <div>
+            <div class="pkg-badge-row">
+              <span class="pkg-os-tag">🐍 Python 3.9+</span>
+              <span class="pkg-ver">PEP 427 • .WHL</span>
+            </div>
+            <div class="pkg-title">Universal Python Wheel</div>
+            <p class="pkg-desc">Install via <code>pip</code> or <code>pipx</code> on Windows, Linux, or macOS with native console & GUI entry-point executables.</p>
+          </div>
+          <div class="pkg-actions">
+            <a href="downloads/ffmpeg_h265_transcoder-2.0.0-py3-none-any.whl" download class="btn-dl">⬇ Wheel (.whl)</a>
+            <a href="downloads/ffmpeg_h265_transcoder-2.0.0.tar.gz" download class="btn-dl-alt">sdist</a>
+          </div>
+        </div>
+      </div>
+    </section>
 
     <!-- OS Switcher Tabs -->
     <div class="os-tabs">
-      <button class="os-tab-btn active" data-tab="linux">
-        <span>🐧</span> Linux (Ubuntu / Debian / Arch / Fedora)
+      <button class="os-tab-btn active" data-tab="windows">
+        <span>🪟</span> Windows (PowerShell / Package / CMD)
+      </button>
+      <button class="os-tab-btn" data-tab="linux">
+        <span>🐧</span> Linux (.deb / curl)
       </button>
       <button class="os-tab-btn" data-tab="macos">
         <span>🍎</span> macOS (Apple Silicon & Intel)
       </button>
-      <button class="os-tab-btn" data-tab="windows">
-        <span>🪟</span> Windows (PowerShell & Terminal)
+      <button class="os-tab-btn" data-tab="python">
+        <span>🐍</span> Python Package (pip / pipx)
       </button>
       <button class="os-tab-btn" data-tab="docker">
-        <span>🐳</span> Docker & Container
+        <span>🐳</span> Docker & K8s
       </button>
     </div>
 
-    <!-- TAB 1: LINUX -->
-    <div class="tab-pane active" id="tab-linux">
+    <!-- TAB 1: WINDOWS -->
+    <div class="tab-pane active" id="tab-windows">
+      <div class="steps-container">
+
+        <div class="step-card">
+          <div class="step-header">
+            <span class="step-num">1</span>
+            <div>
+              <div class="step-title">Option A: 1-Line PowerShell Install (PowerShell 5.1 & PowerShell 7+)</div>
+              <div style="font-size: 0.85rem; color: var(--text-muted);">Installs <code>transcode-media</code>, <code>ffmpeg-convert</code>, <code>transcode-gui</code>, and <code>gpu-monitor</code> to your User PATH (no Admin required).</div>
+            </div>
+          </div>
+          <div class="code-box">
+            <code id="curl-win">irm https://ffmpeg.ertechlab.com/install.ps1 | iex</code>
+            <button class="copy-mini-btn" onclick="copyText(this, document.getElementById('curl-win').innerText)">Copy</button>
+          </div>
+          <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.75rem; margin-bottom: 0.35rem;">
+            <strong>Windows Terminal / CMD / ExecutionPolicy-Safe 1-Liner:</strong> (Works from <code>cmd.exe</code>, Run dialog, or strict PowerShell policies)
+          </p>
+          <div class="code-box">
+            <code id="cmd-win-ps">powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://ffmpeg.ertechlab.com/install.ps1 | iex"</code>
+            <button class="copy-mini-btn" onclick="copyText(this, document.getElementById('cmd-win-ps').innerText)">Copy</button>
+          </div>
+          <p style="font-size: 0.85rem; color: var(--text-dim); margin-top: 0.5rem;">
+            CMD curl bootstrapper: <code style="color:var(--text-muted);">curl.exe -fsSL https://ffmpeg.ertechlab.com/install.cmd -o "%TEMP%\ff-install.cmd" && "%TEMP%\ff-install.cmd"</code>
+          </p>
+        </div>
+
+        <div class="step-card">
+          <div class="step-header">
+            <span class="step-num">2</span>
+            <div>
+              <div class="step-title">Option B: Native Windows Setup Package (.exe GUI or Silent /S)</div>
+              <div style="font-size: 0.85rem; color: var(--text-muted);">Prefer a standalone package? Download <a href="downloads/FFmpeg-Transcoder-Setup-x64.exe" style="color:var(--cyan); text-decoration:underline;">FFmpeg-Transcoder-Setup-x64.exe</a> or run unattended via PowerShell:</div>
+            </div>
+          </div>
+          <div class="code-box">
+            <code id="pkg-win-silent">irm https://ffmpeg.ertechlab.com/downloads/FFmpeg-Transcoder-Setup-x64.exe -OutFile "$env:TEMP\FFmpeg-Setup.exe"; Start-Process -Wait "$env:TEMP\FFmpeg-Setup.exe" -ArgumentList "/S"</code>
+            <button class="copy-mini-btn" onclick="copyText(this, document.getElementById('pkg-win-silent').innerText)">Copy</button>
+          </div>
+          <div style="display: flex; gap: 0.75rem; flex-wrap: wrap; margin-top: 0.75rem;">
+            <a href="downloads/FFmpeg-Transcoder-Setup-x64.exe" download class="btn-primary" style="padding: 0.5rem 1.1rem; font-size: 0.85rem;">⬇ Download Setup (.exe)</a>
+            <a href="downloads/FFmpeg-Transcoder-Windows-Portable.zip" download class="btn-secondary" style="padding: 0.5rem 1.1rem; font-size: 0.85rem;">⬇ Download Portable (.zip)</a>
+          </div>
+        </div>
+
+        <div class="step-card">
+          <div class="step-header">
+            <span class="step-num">3</span>
+            <div>
+              <div class="step-title">System Prerequisites via WinGet (Python 3 & FFmpeg)</div>
+              <div style="font-size: 0.85rem; color: var(--text-muted);">If Python 3 or FFmpeg are not yet installed on Windows, install both with full NVENC/QSV/AMF codecs in one command:</div>
+            </div>
+          </div>
+          <div class="code-box">
+            <code>winget install --id Python.Python.3.12 -e; winget install --id Gyan.FFmpeg -e</code>
+            <button class="copy-mini-btn" onclick="copyText(this, 'winget install --id Python.Python.3.12 -e; winget install --id Gyan.FFmpeg -e')">Copy</button>
+          </div>
+        </div>
+
+        <div class="step-card">
+          <div class="step-header">
+            <span class="step-num">4</span>
+            <div>
+              <div class="step-title">Launch CLI or Multi-GPU Studio GUI</div>
+              <div style="font-size: 0.85rem; color: var(--text-muted);">Run immediately in PowerShell, Windows Terminal, or CMD — or open <strong>FFmpeg H.265 Transcoder Studio</strong> from Start Menu:</div>
+            </div>
+          </div>
+          <div class="code-box">
+            <code>transcode-media "D:\Media\Movies" --dry-run</code>
+            <button class="copy-mini-btn" onclick="copyText(this, 'transcode-media \"D:\\Media\\Movies\" --dry-run')">Copy</button>
+          </div>
+          <div class="code-box">
+            <code>transcode-gui</code>
+            <button class="copy-mini-btn" onclick="copyText(this, 'transcode-gui')">Copy</button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- TAB 2: LINUX -->
+    <div class="tab-pane" id="tab-linux">
       <div class="steps-container">
 
         <!-- Step 1: 1-Line Curl -->
@@ -70,23 +232,35 @@
           <div class="step-header">
             <span class="step-num">1</span>
             <div>
-              <div class="step-title">Quick Install via curl (Recommended)</div>
-              <div style="font-size: 0.85rem; color: var(--text-muted);">Installs <code>transcode-media</code> and alias <code>ffmpeg-convert</code> directly to your PATH.</div>
+              <div class="step-title">Option A: Quick Install via curl (All Distros)</div>
+              <div style="font-size: 0.85rem; color: var(--text-muted);">Installs <code>transcode-media</code>, <code>ffmpeg-convert</code>, <code>transcode-gui</code>, and <code>gpu-monitor</code> directly to your PATH.</div>
             </div>
           </div>
           <div class="code-box">
             <code id="curl-linux">curl -fsSL https://ffmpeg.ertechlab.com/install.sh | bash</code>
             <button class="copy-mini-btn" onclick="copyText(this, document.getElementById('curl-linux').innerText)">Copy</button>
           </div>
-          <p style="font-size: 0.85rem; color: var(--text-dim); margin-top: 0.5rem;">
-            Alternative GitHub raw source: <code style="color:var(--text-muted);">curl -fsSL https://raw.githubusercontent.com/digdast/ffmpeg_convert_h265_mp4/main/install.sh | bash</code>
-          </p>
         </div>
 
-        <!-- Step 2: Prerequisites -->
+        <!-- Step 2: Debian/Ubuntu .deb Package -->
         <div class="step-card">
           <div class="step-header">
             <span class="step-num">2</span>
+            <div>
+              <div class="step-title">Option B: Debian / Ubuntu / Proxmox (.deb Package)</div>
+              <div style="font-size: 0.85rem; color: var(--text-muted);">Install via <code>apt</code> to automatically resolve <code>python3</code> and <code>ffmpeg</code> dependencies:</div>
+            </div>
+          </div>
+          <div class="code-box">
+            <code id="deb-linux">curl -fsSL https://ffmpeg.ertechlab.com/downloads/ffmpeg-transcoder_2.0.0_all.deb -o /tmp/ffmpeg-transcoder.deb && sudo apt install -y /tmp/ffmpeg-transcoder.deb</code>
+            <button class="copy-mini-btn" onclick="copyText(this, document.getElementById('deb-linux').innerText)">Copy</button>
+          </div>
+        </div>
+
+        <!-- Step 3: Prerequisites -->
+        <div class="step-card">
+          <div class="step-header">
+            <span class="step-num">3</span>
             <div>
               <div class="step-title">System Prerequisites & GPU Drivers</div>
               <div style="font-size: 0.85rem; color: var(--text-muted);">Requires Python 3.9+ and FFmpeg with hardware acceleration support.</div>
@@ -102,15 +276,12 @@
             <code>sudo pacman -S python ffmpeg</code>
             <button class="copy-mini-btn" onclick="copyText(this, 'sudo pacman -S python ffmpeg')">Copy</button>
           </div>
-          <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.75rem;">
-            💡 <em>For NVIDIA NVENC acceleration on Linux, ensure the proprietary NVIDIA display driver is loaded (<code style="color:var(--cyan);">nvidia-smi</code>).</em>
-          </p>
         </div>
 
-        <!-- Step 3: Verification -->
+        <!-- Step 4: Verification -->
         <div class="step-card">
           <div class="step-header">
-            <span class="step-num">3</span>
+            <span class="step-num">4</span>
             <div>
               <div class="step-title">Verify Installation</div>
             </div>
@@ -124,7 +295,7 @@
       </div>
     </div>
 
-    <!-- TAB 2: MACOS -->
+    <!-- TAB 3: MACOS -->
     <div class="tab-pane" id="tab-macos">
       <div class="steps-container">
 
@@ -175,55 +346,35 @@
       </div>
     </div>
 
-    <!-- TAB 3: WINDOWS -->
-    <div class="tab-pane" id="tab-windows">
+    <!-- TAB 4: PYTHON PIP / PIPX -->
+    <div class="tab-pane" id="tab-python">
       <div class="steps-container">
 
         <div class="step-card">
           <div class="step-header">
             <span class="step-num">1</span>
             <div>
-              <div class="step-title">1-Line PowerShell Installation</div>
-              <div style="font-size: 0.85rem; color: var(--text-muted);">Runs in standard Windows PowerShell (5.1) or PowerShell Core (7+). No admin rights required.</div>
+              <div class="step-title">Install Official Wheel via pip (Windows / Linux / macOS)</div>
+              <div style="font-size: 0.85rem; color: var(--text-muted);">Generates native OS executables for <code>transcode-media</code>, <code>ffmpeg-convert</code>, <code>transcode-gui</code>, and <code>gpu-monitor</code>:</div>
             </div>
           </div>
           <div class="code-box">
-            <code id="curl-win">irm https://ffmpeg.ertechlab.com/install.ps1 | iex</code>
-            <button class="copy-mini-btn" onclick="copyText(this, document.getElementById('curl-win').innerText)">Copy</button>
+            <code id="pip-whl">pip install https://ffmpeg.ertechlab.com/downloads/ffmpeg_h265_transcoder-2.0.0-py3-none-any.whl</code>
+            <button class="copy-mini-btn" onclick="copyText(this, document.getElementById('pip-whl').innerText)">Copy</button>
           </div>
-          <p style="font-size: 0.85rem; color: var(--text-dim); margin-top: 0.5rem;">
-            Alternative GitHub raw source: <code style="color:var(--text-muted);">irm https://raw.githubusercontent.com/digdast/ffmpeg_convert_h265_mp4/main/install.ps1 | iex</code>
-          </p>
         </div>
 
         <div class="step-card">
           <div class="step-header">
             <span class="step-num">2</span>
             <div>
-              <div class="step-title">Prerequisites via Windows Package Manager (winget)</div>
-              <div style="font-size: 0.85rem; color: var(--text-muted);">If Python or FFmpeg are not already in your Windows PATH, install both with a single command:</div>
+              <div class="step-title">Isolated Global CLI Install via pipx</div>
+              <div style="font-size: 0.85rem; color: var(--text-muted);">Ideal on externally-managed Python environments (Ubuntu 24.04+, Debian 12+, macOS Homebrew):</div>
             </div>
           </div>
           <div class="code-box">
-            <code>winget install Python.Python.3.12 Gyan.FFmpeg</code>
-            <button class="copy-mini-btn" onclick="copyText(this, 'winget install Python.Python.3.12 Gyan.FFmpeg')">Copy</button>
-          </div>
-          <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.75rem;">
-            💡 <em>Gyan.FFmpeg includes full NVIDIA NVENC and Intel QuickSync hardware codecs out of the box.</em>
-          </p>
-        </div>
-
-        <div class="step-card">
-          <div class="step-header">
-            <span class="step-num">3</span>
-            <div>
-              <div class="step-title">Instant Global Execution</div>
-              <div style="font-size: 0.85rem; color: var(--text-muted);">Both <code>transcode-media</code> and <code>ffmpeg-convert</code> are available in CMD and PowerShell:</div>
-            </div>
-          </div>
-          <div class="code-box">
-            <code>transcode-media "D:\Media\Movies" --dry-run</code>
-            <button class="copy-mini-btn" onclick="copyText(this, 'transcode-media \"D:\\Media\\Movies\" --dry-run')">Copy</button>
+            <code id="pipx-whl">pipx install https://ffmpeg.ertechlab.com/downloads/ffmpeg_h265_transcoder-2.0.0-py3-none-any.whl</code>
+            <button class="copy-mini-btn" onclick="copyText(this, document.getElementById('pipx-whl').innerText)">Copy</button>
           </div>
         </div>
 
@@ -457,6 +608,22 @@
     </section>
 
   </main>
+
+  <!-- Google AdSense Responsive Display Unit -->
+  <div style="max-width: 1120px; margin: 1.75rem auto; padding: 0 1.5rem;">
+    <div style="background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 12px; padding: 0.85rem 1rem; text-align: center; overflow: hidden;">
+      <div style="font-family: monospace; font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.14em; color: #64748b; margin-bottom: 0.45rem;">Sponsored GPU &amp; Media Infrastructure Partners</div>
+      <ins class="adsbygoogle"
+           style="display:block; min-height:90px;"
+           data-ad-client="ca-pub-1596056523034714"
+           data-ad-slot="auto"
+           data-ad-format="auto"
+           data-full-width-responsive="true"></ins>
+      <script>
+        (adsbygoogle = window.adsbygoogle || []).push({});
+      </script>
+    </div>
+  </div>
 
   <!-- Footer -->
   <footer>

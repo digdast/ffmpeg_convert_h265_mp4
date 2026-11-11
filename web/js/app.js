@@ -98,6 +98,19 @@ document.addEventListener('DOMContentLoaded', () => {
       if (tab) switchTab(tab);
     });
   });
+
+  // Auto-select visitor OS tab on install page unless hash overrides
+  if (document.querySelector('.os-tab-btn')) {
+    const hash = (window.location.hash || '').replace('#', '').toLowerCase();
+    if (['windows', 'linux', 'macos', 'python', 'docker'].includes(hash)) {
+      switchTab(hash);
+    } else {
+      const ua = navigator.userAgent || '';
+      if (/Win/i.test(ua)) switchTab('windows');
+      else if (/Mac/i.test(ua)) switchTab('macos');
+      else if (/Linux/i.test(ua)) switchTab('linux');
+    }
+  }
 });
 
 

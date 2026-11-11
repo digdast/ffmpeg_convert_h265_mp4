@@ -174,7 +174,7 @@ class MultiGPUManager:
         if smi:
             try:
                 res = subprocess.run(
-                    [smi, "--query-gpu=index,name,memory.total", "--format=csv,noheader,nounits"],
+                    [smi, "--query-gpu=index,name,memory.total,memory.used", "--format=csv,noheader,nounits"],
                     capture_output=True,
                     text=True,
                     timeout=5
@@ -188,6 +188,7 @@ class MultiGPUManager:
                             idx = int(parts[0])
                             name = parts[1]
                             vram = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else None
+                            vram_used = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 0
                             card = GPUCard(
                                 device_id=f"nvidia:{idx}",
                                 vendor="NVIDIA",
@@ -197,8 +198,11 @@ class MultiGPUManager:
                                 vram_mb=vram,
                                 extra_args=["-gpu", str(idx)]
                             )
-                            if "hevc_nvenc" in supported_encs and self.test_encoder("hevc_nvenc", card.extra_args):
-                                card.is_functional = True
+                            if "hevc_nvenc" in supported_encs:
+                                # Verify encoder; physical NVIDIA cards detected via nvidia-smi are always retained
+                                # so transient VRAM pressure from LLMs (Ollama) doesn't hide the card
+                                is_tested = self.test_encoder("hevc_nvenc", card.extra_args)
+                                card.is_functional = is_tested or (vram is not None and vram > 2000)
                                 devices.append(card)
             except Exception:
                 pass

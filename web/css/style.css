@@ -765,4 +765,120 @@ footer a {
   white-space: nowrap;
 }
 
+/* Package Download Cards */
+.pkg-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(245px, 1fr));
+  gap: 1.15rem;
+  margin: 1.5rem 0 2.25rem;
+}
+
+.pkg-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 1.35rem 1.4rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 0.9rem;
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.pkg-card:hover {
+  transform: translateY(-3px);
+  border-color: var(--cyan);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+}
+
+.pkg-card.featured {
+  border-color: rgba(56, 189, 248, 0.45);
+  background: linear-gradient(160deg, rgba(14, 165, 233, 0.12), rgba(15, 23, 42, 0.85));
+}
+
+.pkg-badge-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.pkg-os-tag {
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  font-weight: 700;
+  padding: 0.2rem 0.55rem;
+  border-radius: 6px;
+  background: rgba(56, 189, 248, 0.14);
+  color: var(--cyan);
+  text-transform: uppercase;
+}
+
+.pkg-ver {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}
+
+.pkg-title {
+  font-size: 1.08rem;
+  font-weight: 700;
+  color: var(--text-main);
+  margin-top: 0.35rem;
+}
+
+.pkg-desc {
+  font-size: 0.84rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.pkg-actions {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.btn-dl {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  padding: 0.55rem 1rem;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  background: linear-gradient(135deg, var(--cyan), #0284c7);
+  color: #060913;
+  transition: all 0.2s ease;
+  flex: 1;
+  text-align: center;
+}
+
+.btn-dl:hover {
+  filter: brightness(1.1);
+  box-shadow: 0 4px 16px var(--cyan-glow);
+}
+
+.btn-dl-alt {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  padding: 0.55rem 0.9rem;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  background: rgba(30, 41, 59, 0.75);
+  border: 1px solid var(--border);
+  color: var(--text-main);
+  transition: all 0.2s ease;
+}
+
+.btn-dl-alt:hover {
+  border-color: var(--cyan);
+  color: var(--cyan);
+}
+
+
 

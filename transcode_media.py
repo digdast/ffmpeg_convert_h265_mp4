@@ -602,7 +602,9 @@ class Transcoder:
         delete_original: bool = False,
         skip_hevc: bool = True,
         container: str = "auto",
-        dry_run: bool = False
+        dry_run: bool = False,
+        gui_telemetry: bool = False,
+        gpu_id: Optional[int] = None
     ):
         self.encoder = encoder
         self.hw_desc = hw_desc
@@ -622,6 +624,8 @@ class Transcoder:
         self.skip_hevc = skip_hevc
         self.container = container
         self.dry_run = dry_run
+        self.gui_telemetry = gui_telemetry
+        self.gpu_id = gpu_id
 
         self.current_temp_outputs: List[str] = []
         self.stats_lock = threading.Lock()
@@ -741,6 +745,10 @@ class Transcoder:
             ])
 
         # Extra hardware args (e.g. -gpu 0, -gpu 1)
+        if encoder == "hevc_nvenc" and self.gpu_id is not None:
+            if "-gpu" not in cmd:
+                cmd.extend(["-gpu", str(self.gpu_id)])
+
         if extra_args:
             for arg in extra_args:
                 if arg not in cmd:
@@ -822,6 +830,8 @@ class Transcoder:
             if self.container in ("auto", "same") or in_ext.lower() == out_ext:
                 with self.print_lock:
                     print(f" {Colors.DIM}✔ [COMPLIANT]{Colors.RESET} Already {info['codec'].upper()}: {Colors.CYAN}{file_name}{Colors.RESET}")
+                if self.gui_telemetry:
+                    print(f"__GUI_RESULT__:status=skipped|file={file_name}|orig_size={orig_size}|new_size={orig_size}|saved_bytes=0|saved_pct=0.0", flush=True)
                 with self.stats_lock:
                     self.stats["skipped"] += 1
                     self.stats["new_bytes"] += orig_size
@@ -931,6 +941,17 @@ class Transcoder:
                             current_bytes=int(cur_kv.get("total_size", 0)) if cur_kv.get("total_size", "").isdigit() else 0
                         )
 
+                        if self.gui_telemetry and info["duration"] > 0:
+                            fraction = min(1.0, max(0.0, out_sec / info["duration"]))
+                            print(
+                                f"__GUI_TELEMETRY__:fraction={fraction:.4f}|"
+                                f"speed={cur_kv.get('speed', 'N/A')}|"
+                                f"fps={cur_kv.get('fps', '0')}|"
+                                f"bitrate={cur_kv.get('bitrate', 'N/A')}|"
+                                f"out_sec={out_sec:.2f}|total_sec={info['duration']:.2f}",
+                                flush=True
+                            )
+
             proc.wait()
             err_thread.join(timeout=1.0)
             elapsed = time.time() - t_start
@@ -952,6 +973,14 @@ class Transcoder:
                 self.stats["transcoded"] += 1
                 self.stats["transcoded_orig_bytes"] += orig_size
                 self.stats["transcoded_new_bytes"] += new_size
+
+            if self.gui_telemetry:
+                print(
+                    f"__GUI_RESULT__:status=complete|file={file_name}|"
+                    f"orig_size={orig_size}|new_size={new_size}|"
+                    f"saved_bytes={saved_bytes}|saved_pct={ratio_pct:.2f}",
+                    flush=True
+                )
 
             # Atomic swap to target destination
             if file_path == final_output:
@@ -1209,12 +1238,23 @@ def parse_arguments():
         "path",
         nargs="?",
         default=None,
-        help="Path to media directory or single video file"
+        help="Path to media directory or single video file (e.g. \"D:\\Movies\")"
+    )
+    parser.add_argument(
+        "-d", "--dir", "--directory",
+        dest="input_dir",
+        default=None,
+        help="Explicit flag to specify the media directory or video file to transcode/encode"
     )
     parser.add_argument(
         "--gui",
         action="store_true",
-        help="Launch the interactive Graphical User Interface (GUI) Studio with Level Progress Bars and Dual-GPU controls"
+        help="Launch the interactive Graphical User Interface (GUI) Studio with Folder Picker & Dual-GPU controls"
+    )
+    parser.add_argument(
+        "--cli",
+        action="store_true",
+        help="Force terminal interactive CLI mode (prompt for directory path in terminal instead of opening GUI)"
     )
 
     # Acceleration Modes
@@ -1285,6 +1325,12 @@ def parse_arguments():
         help="Constant Quality / CRF level (18=near lossless, 24=optimal balance, 28=smaller; default: 24)"
     )
     enc_group.add_argument(
+        "--gpu-id",
+        type=int,
+        default=None,
+        help="Specific NVIDIA GPU device index to encode on (e.g. 0 for RTX 5070, 1 for RTX 3060)"
+    )
+    enc_group.add_argument(
         "--preset",
         default="p4",
         help="Encoder speed preset (NVENC: p1-p7 or medium/fast; CPU: ultrafast-veryslow; default: p4)"
@@ -1347,20 +1393,29 @@ def parse_arguments():
         action="store_true",
         help="Scan and display planned transcode actions without running ffmpeg"
     )
+    file_group.add_argument(
+        "--gui-telemetry",
+        action="store_true",
+        help="Emit structured telemetry lines for GUI frontends (__GUI_TELEMETRY__: fraction=...)"
+    )
 
     return parser.parse_args()
 
 
 def main():
     args = parse_arguments()
+    if not args.path and getattr(args, "input_dir", None):
+        args.path = args.input_dir
 
     # GUI Studio Launch
-    if args.gui or (not args.path and sys.stdin.isatty() and len(sys.argv) == 1 and os.environ.get("DISPLAY") or os.name == "nt" and len(sys.argv) == 1):
+    if args.gui or (not args.cli and not args.path and ((sys.stdin.isatty() and len(sys.argv) == 1 and os.environ.get("DISPLAY")) or (os.name == "nt" and len(sys.argv) == 1))):
         try:
             from transcode_gui import main as gui_main
+            if args.path:
+                sys.argv = [sys.argv[0], args.path]
             gui_main()
             return
-        except Exception as e:
+        except Exception:
             # If graphical display is not available, fall through to CLI prompt
             pass
 
@@ -1413,7 +1468,9 @@ def main():
         delete_original=args.delete_original,
         skip_hevc=not args.re_encode_hevc,
         container=args.container,
-        dry_run=args.dry_run
+        dry_run=args.dry_run,
+        gui_telemetry=args.gui_telemetry,
+        gpu_id=args.gpu_id
     )
 
     try:

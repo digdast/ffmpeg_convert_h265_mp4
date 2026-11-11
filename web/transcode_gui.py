@@ -36,6 +36,20 @@ except ImportError:
     sys.path.insert(0, script_dir)
     from gpu_detector import GPUCard, MultiGPUManager, get_ffmpeg_path, get_ffprobe_path
 
+# Import remote NAS transcode engine
+try:
+    from remote_engine import (
+        RemoteTranscodeManager, RemoteHostConfig, load_remote_configs,
+        save_remote_configs, DEFAULT_PRESET_CONFIGS
+    )
+except ImportError:
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    sys.path.insert(0, script_dir)
+    from remote_engine import (
+        RemoteTranscodeManager, RemoteHostConfig, load_remote_configs,
+        save_remote_configs, DEFAULT_PRESET_CONFIGS
+    )
+
 # High-DPI awareness on Windows
 if os.name == "nt":
     try:
@@ -295,8 +309,8 @@ class TranscoderStudioGUI(tk.Tk):
         super().__init__()
 
         self.title("⚡ FFmpeg Multi-GPU Transcoder Studio | Dual-Engine H.265")
-        self.geometry("1160x860")
-        self.minsize(980, 720)
+        self.geometry("1200x820")
+        self.minsize(980, 680)
         self.configure(bg=Theme.BG)
 
         # Hardware manager
@@ -324,19 +338,60 @@ class TranscoderStudioGUI(tk.Tk):
             "start_time": 0.0
         }
 
+        # Remote Target Environment State
+        self.target_mode_var = tk.StringVar(value="local")  # "local" or "remote"
+        self.remote_manager = RemoteTranscodeManager()
+        self.remote_configs: List[RemoteHostConfig] = load_remote_configs()
+        self.mode_var = tk.StringVar(value="dual_gpu" if len([d for d in self.detected_devices if d.vendor != "CPU"]) >= 2 else "auto")
+
         # Setup ttk style
         self.setup_styles()
 
-        # Build UI layout
+        # Shared queue/source variables initialized before panels
+        self.recursive_var = tk.BooleanVar(value=True)
+        self.source_dir_var = tk.StringVar(value="")
+        self.remote_path_var = tk.StringVar(value="/data/media/movies")
+
+        # Build UI layout with fail-safe docking order:
+        # 1. Header (pinned to top)
         self.create_header_panel()
+        # 2. STEP 1: Source Media Directory / Folder Selector (pinned right below header — ALWAYS visible!)
+        self.create_source_directory_panel()
+        # 3. Bottom Action/Status Bar (pinned to bottom FIRST so it is NEVER pushed off-screen)
+        self.create_action_bar()
+        # 4. Scrollable / Responsive Main Workspace so Queue & Controls NEVER clip on any DPI/resolution
+        self.create_scrollable_workspace()
+        self.create_target_environment_panel()
+        self.create_queue_panel()
         self.create_hardware_panel()
         self.create_settings_panel()
-        self.create_queue_panel()
         self.create_progress_panel()
-        self.create_action_bar()
+
+        # Load any paths passed on command line (e.g., `transcode-gui "D:\Movies"`)
+        if len(sys.argv) > 1:
+            self.after(150, lambda: self.load_cli_paths(sys.argv[1:]))
 
         # Telemetry update timer
         self.after(50, self.periodic_ui_update)
+
+    def update_start_button_state(self, text: Optional[str] = None, bg: Optional[str] = None, fg: Optional[str] = None):
+        """Synchronizes text and appearance across all Start/Stop buttons in UI."""
+        is_remote = (self.target_mode_var.get() == "remote")
+        if text is None:
+            text = "▶ Start Remote NAS Transcode" if is_remote else "▶ Start Dual-GPU Transcode"
+        if bg is None:
+            bg = Theme.SUCCESS
+        if fg is None:
+            fg = "#000000"
+
+        for btn in (getattr(self, "btn_start", None),
+                    getattr(self, "btn_start_queue_local", None),
+                    getattr(self, "btn_start_queue_remote", None)):
+            if btn:
+                try:
+                    btn.config(text=text, bg=bg, fg=fg)
+                except Exception:
+                    pass
 
     def post_ui(self, fn, *args):
         """Thread-safe UI dispatcher: queues a callback to execute on main thread."""
@@ -393,7 +448,7 @@ class TranscoderStudioGUI(tk.Tk):
 
         title_lbl = tk.Label(
             title_box,
-            text="⚡ FFmpeg Multi-GPU Transcoder Studio",
+            text="⚡ FFmpeg Multi-GPU & Remote NAS Transcoder Studio",
             fg=Theme.TEXT,
             bg=Theme.HEADER_BG,
             font=("Segoe UI", 15, "bold")
@@ -402,7 +457,7 @@ class TranscoderStudioGUI(tk.Tk):
 
         subtitle = tk.Label(
             title_box,
-            text="Simultaneous Dual-GPU & Multi-Core Hardware Acceleration (NVENC + QSV + AMF + CPU)",
+            text="Dual-GPU Acceleration + Remote SSH Direct Transcoding for Mounted NAS Drives",
             fg=Theme.ACCENT,
             bg=Theme.HEADER_BG,
             font=("Segoe UI", 9)
@@ -434,76 +489,606 @@ class TranscoderStudioGUI(tk.Tk):
         )
         ff_badge.pack(anchor="e")
 
-    def create_hardware_panel(self):
-        frame = tk.LabelFrame(
+    def create_source_directory_panel(self):
+        """Pinned top bar so selecting/pasting a media directory to transcode is always Step 1."""
+        src_outer = tk.Frame(
             self,
-            text="  ⚡ Hardware Acceleration & Multi-GPU Configuration  ",
+            bg="#1e293b",
+            padx=14,
+            pady=10,
+            highlightthickness=2,
+            highlightbackground=Theme.ACCENT
+        )
+        src_outer.pack(fill="x", padx=14, pady=(8, 4))
+
+        top_hdr = tk.Frame(src_outer, bg="#1e293b")
+        top_hdr.pack(fill="x", pady=(0, 6))
+
+        tk.Label(
+            top_hdr,
+            text="📂 STEP 1: Select Media Directory or Video Files to Transcode / Encode",
+            fg=Theme.ACCENT,
+            bg="#1e293b",
+            font=("Segoe UI", 10, "bold")
+        ).pack(side="left")
+
+        self.top_queue_badge = tk.Label(
+            top_hdr,
+            text="Queue: 0 videos ready",
+            fg=Theme.WARNING,
+            bg="#0f172a",
+            font=("Segoe UI", 9, "bold"),
+            padx=10,
+            pady=2
+        )
+        self.top_queue_badge.pack(side="right")
+
+        # Local Source Row
+        self.top_local_source_row = tk.Frame(src_outer, bg="#1e293b")
+        self.top_local_source_row.pack(fill="x")
+
+        tk.Button(
+            self.top_local_source_row,
+            text="📂 Browse Directory...",
+            bg=Theme.ACCENT,
+            fg="#000000",
+            font=("Segoe UI", 10, "bold"),
+            relief="flat",
+            padx=14,
+            pady=5,
+            cursor="hand2",
+            command=self.add_folder
+        ).pack(side="left", padx=(0, 8))
+
+        tk.Button(
+            self.top_local_source_row,
+            text="➕ Add Video Files...",
+            bg=Theme.BORDER,
+            fg=Theme.TEXT,
+            font=("Segoe UI", 9, "bold"),
+            relief="flat",
+            padx=10,
+            pady=5,
+            cursor="hand2",
+            command=self.add_files
+        ).pack(side="left", padx=(0, 12))
+
+        tk.Label(
+            self.top_local_source_row,
+            text="Or Paste Folder/UNC Path:",
+            fg=Theme.TEXT,
+            bg="#1e293b",
+            font=("Segoe UI", 9)
+        ).pack(side="left", padx=(0, 6))
+
+        self.source_dir_entry = tk.Entry(
+            self.top_local_source_row,
+            textvariable=self.source_dir_var,
+            bg=Theme.BG,
+            fg=Theme.TEXT,
+            insertbackground=Theme.TEXT,
+            font=("Segoe UI", 9),
+            relief="solid"
+        )
+        self.source_dir_entry.pack(side="left", fill="x", expand=True, padx=(0, 6), ipady=4)
+        self.source_dir_entry.bind("<Return>", lambda e: self.scan_typed_source_path())
+
+        tk.Button(
+            self.top_local_source_row,
+            text="🔍 Add Path",
+            bg=Theme.SUCCESS,
+            fg="#000000",
+            font=("Segoe UI", 9, "bold"),
+            relief="flat",
+            padx=10,
+            pady=4,
+            cursor="hand2",
+            command=self.scan_typed_source_path
+        ).pack(side="left", padx=(0, 10))
+
+        tk.Checkbutton(
+            self.top_local_source_row,
+            text="Subfolders",
+            variable=self.recursive_var,
+            bg="#1e293b",
+            fg=Theme.TEXT,
+            selectcolor=Theme.HEADER_BG,
+            activebackground="#1e293b",
+            font=("Segoe UI", 9)
+        ).pack(side="left")
+
+        # Remote Source Row (shown when Remote NAS mode is selected)
+        self.top_remote_source_row = tk.Frame(src_outer, bg="#1e293b")
+
+        tk.Label(
+            self.top_remote_source_row,
+            text="Remote NAS Directory:",
+            fg=Theme.TEXT,
+            bg="#1e293b",
+            font=("Segoe UI", 9, "bold")
+        ).pack(side="left", padx=(0, 6))
+
+        ttk.Combobox(
+            self.top_remote_source_row,
+            textvariable=self.remote_path_var,
+            values=[
+                "/data/media/movies",
+                "/data/media/tv-shows",
+                "/mnt/user/data/media",
+                "/data"
+            ],
+            width=44
+        ).pack(side="left", fill="x", expand=True, padx=(0, 8))
+
+        tk.Button(
+            self.top_remote_source_row,
+            text="📂 Scan Remote Directory",
+            bg=Theme.ACCENT,
+            fg="#000000",
+            font=("Segoe UI", 9, "bold"),
+            relief="flat",
+            padx=12,
+            pady=4,
+            command=self.scan_remote_dir
+        ).pack(side="left", padx=(0, 6))
+
+        tk.Button(
+            self.top_remote_source_row,
+            text="📄 Add Remote File...",
+            bg=Theme.BORDER,
+            fg=Theme.TEXT,
+            font=("Segoe UI", 9),
+            relief="flat",
+            padx=8,
+            pady=4,
+            command=self.prompt_add_remote_file
+        ).pack(side="left")
+
+    def create_scrollable_workspace(self):
+        """Scrollable container so no panel is ever clipped on High-DPI or smaller screens."""
+        container = tk.Frame(self, bg=Theme.BG)
+        container.pack(fill="both", expand=True)
+
+        self.workspace_canvas = tk.Canvas(container, bg=Theme.BG, highlightthickness=0)
+        vscroll = ttk.Scrollbar(container, orient="vertical", command=self.workspace_canvas.yview)
+        self.workspace_canvas.configure(yscrollcommand=vscroll.set)
+
+        vscroll.pack(side="right", fill="y")
+        self.workspace_canvas.pack(side="left", fill="both", expand=True)
+
+        self.workspace_inner = tk.Frame(self.workspace_canvas, bg=Theme.BG)
+        self._workspace_win = self.workspace_canvas.create_window((0, 0), window=self.workspace_inner, anchor="nw")
+
+        self.workspace_inner.bind(
+            "<Configure>",
+            lambda e: self.workspace_canvas.configure(scrollregion=self.workspace_canvas.bbox("all"))
+        )
+        self.workspace_canvas.bind(
+            "<Configure>",
+            lambda e: self.workspace_canvas.itemconfigure(self._workspace_win, width=e.width)
+        )
+
+        def _on_mousewheel(event):
+            if getattr(event, "delta", 0):
+                self.workspace_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        self.bind_all("<MouseWheel>", _on_mousewheel)
+
+    def create_target_environment_panel(self):
+        env_frame = tk.LabelFrame(
+            self.workspace_inner,
+            text="  🎯 Target Environment & Remote NAS Connection  ",
             fg=Theme.ACCENT,
             bg=Theme.PANEL_BG,
             font=("Segoe UI", 10, "bold"),
             padx=12,
             pady=8
         )
-        frame.pack(fill="x", padx=14, pady=(10, 6))
+        env_frame.pack(fill="x", padx=14, pady=(8, 4))
 
-        # Detected GPUs summary
-        gpu_names = [f"[{d.vendor}] {d.name}" for d in self.detected_devices if d.vendor != "CPU"]
-        summary_str = f"Found {len(gpu_names)} GPU(s): " + "  •  ".join(gpu_names) if gpu_names else "No dedicated GPU detected (CPU mode available)"
+        # Switcher Row: Local vs Remote
+        switch_row = tk.Frame(env_frame, bg=Theme.PANEL_BG)
+        switch_row.pack(fill="x")
 
-        det_lbl = tk.Label(
+        tk.Radiobutton(
+            switch_row,
+            text="🖥 Local Host Machine (Direct Local NVIDIA / Intel / AMD / CPU)",
+            variable=self.target_mode_var,
+            value="local",
+            command=self.on_target_mode_changed,
+            bg=Theme.PANEL_BG,
+            fg=Theme.TEXT,
+            selectcolor=Theme.HEADER_BG,
+            activebackground=Theme.PANEL_BG,
+            activeforeground=Theme.ACCENT,
+            font=("Segoe UI", 9, "bold")
+        ).pack(side="left", padx=(0, 24))
+
+        tk.Radiobutton(
+            switch_row,
+            text="🌐 Remote Computer / NAS (SSH Direct Transcoding on Mounted Storage)",
+            variable=self.target_mode_var,
+            value="remote",
+            command=self.on_target_mode_changed,
+            bg=Theme.PANEL_BG,
+            fg=Theme.TEXT,
+            selectcolor=Theme.HEADER_BG,
+            activebackground=Theme.PANEL_BG,
+            activeforeground=Theme.ACCENT,
+            font=("Segoe UI", 9, "bold")
+        ).pack(side="left")
+
+        # Remote Server Configuration Box (shown when Remote mode selected)
+        self.remote_box = tk.Frame(env_frame, bg=Theme.HEADER_BG, padx=10, pady=8, highlightthickness=1, highlightbackground=Theme.BORDER)
+        # Note: packed dynamically in on_target_mode_changed
+
+        # Row 1 of Remote Box: Preset Dropdown + Host + Port + User + Password + Key
+        r1 = tk.Frame(self.remote_box, bg=Theme.HEADER_BG)
+        r1.pack(fill="x", pady=2)
+
+        tk.Label(r1, text="Host Preset:", fg=Theme.TEXT, bg=Theme.HEADER_BG, font=("Segoe UI", 9)).pack(side="left", padx=(0, 4))
+        preset_names = [f"{c.name} ({c.host})" for c in self.remote_configs] + ["Custom Host..."]
+        self.remote_preset_var = tk.StringVar(value=preset_names[0] if preset_names else "Custom Host...")
+        self.remote_preset_cb = ttk.Combobox(
+            r1,
+            textvariable=self.remote_preset_var,
+            values=preset_names,
+            state="readonly",
+            width=36
+        )
+        self.remote_preset_cb.pack(side="left", padx=(0, 10))
+        self.remote_preset_cb.bind("<<ComboboxSelected>>", self.on_remote_preset_selected)
+
+        # Host
+        tk.Label(r1, text="Host IP:", fg=Theme.TEXT, bg=Theme.HEADER_BG, font=("Segoe UI", 9)).pack(side="left", padx=(0, 4))
+        self.remote_host_var = tk.StringVar(value=self.remote_configs[0].host if self.remote_configs else "192.168.0.31")
+        tk.Entry(r1, textvariable=self.remote_host_var, width=13, bg=Theme.BG, fg=Theme.TEXT, insertbackground=Theme.TEXT, relief="solid").pack(side="left", padx=(0, 8))
+
+        # Port
+        tk.Label(r1, text="Port:", fg=Theme.TEXT, bg=Theme.HEADER_BG, font=("Segoe UI", 9)).pack(side="left", padx=(0, 4))
+        self.remote_port_var = tk.StringVar(value="22")
+        tk.Entry(r1, textvariable=self.remote_port_var, width=5, bg=Theme.BG, fg=Theme.TEXT, insertbackground=Theme.TEXT, relief="solid").pack(side="left", padx=(0, 8))
+
+        # User
+        tk.Label(r1, text="User:", fg=Theme.TEXT, bg=Theme.HEADER_BG, font=("Segoe UI", 9)).pack(side="left", padx=(0, 4))
+        self.remote_user_var = tk.StringVar(value=self.remote_configs[0].username if self.remote_configs else "root")
+        tk.Entry(r1, textvariable=self.remote_user_var, width=9, bg=Theme.BG, fg=Theme.TEXT, insertbackground=Theme.TEXT, relief="solid").pack(side="left", padx=(0, 8))
+
+        # Password
+        tk.Label(r1, text="Password:", fg=Theme.TEXT, bg=Theme.HEADER_BG, font=("Segoe UI", 9)).pack(side="left", padx=(0, 4))
+        self.remote_pwd_var = tk.StringVar(value=self.remote_configs[0].password or "sone_420" if self.remote_configs else "")
+        self.remote_pwd_entry = tk.Entry(r1, textvariable=self.remote_pwd_var, show="*", width=12, bg=Theme.BG, fg=Theme.TEXT, insertbackground=Theme.TEXT, relief="solid")
+        self.remote_pwd_entry.pack(side="left", padx=(0, 4))
+
+        self.remote_show_pwd_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            r1,
+            text="👁",
+            variable=self.remote_show_pwd_var,
+            command=self.toggle_show_pwd,
+            bg=Theme.HEADER_BG,
+            fg=Theme.TEXT_MUTED,
+            selectcolor=Theme.HEADER_BG
+        ).pack(side="left", padx=(0, 10))
+
+        # Connect / Disconnect button
+        self.btn_remote_connect = tk.Button(
+            r1,
+            text="🔗 Connect & Detect Hardware",
+            bg=Theme.ACCENT,
+            fg="#000000",
+            font=("Segoe UI", 9, "bold"),
+            relief="flat",
+            padx=10,
+            pady=3,
+            command=self.toggle_remote_connection
+        )
+        self.btn_remote_connect.pack(side="left", padx=4)
+
+        # Row 2: Status indicator line + SSH Key browse
+        r2 = tk.Frame(self.remote_box, bg=Theme.HEADER_BG)
+        r2.pack(fill="x", pady=(4, 0))
+
+        self.remote_status_lbl = tk.Label(
+            r2,
+            text="🔴 Disconnected. Click 'Connect & Detect Hardware' to link to remote host.",
+            fg=Theme.TEXT_MUTED,
+            bg=Theme.HEADER_BG,
+            font=("Segoe UI", 8, "italic")
+        )
+        self.remote_status_lbl.pack(side="left")
+
+        # Save config button
+        tk.Button(
+            r2,
+            text="💾 Save Host Profile",
+            bg=Theme.BORDER,
+            fg=Theme.TEXT,
+            font=("Segoe UI", 8),
+            relief="flat",
+            padx=6,
+            pady=2,
+            command=self.save_current_remote_profile
+        ).pack(side="right", padx=(8, 0))
+
+        # SSH Key input
+        tk.Button(
+            r2,
+            text="🔑 SSH Key...",
+            bg=Theme.BORDER,
+            fg=Theme.TEXT,
+            font=("Segoe UI", 8),
+            relief="flat",
+            padx=6,
+            pady=2,
+            command=self.browse_ssh_key
+        ).pack(side="right")
+        self.remote_key_var = tk.StringVar(value="")
+
+    def on_target_mode_changed(self):
+        mode = self.target_mode_var.get()
+        if mode == "remote":
+            self.remote_box.pack(fill="x", pady=(6, 2))
+            if hasattr(self, "top_local_source_row") and hasattr(self, "top_remote_source_row"):
+                self.top_local_source_row.pack_forget()
+                self.top_remote_source_row.pack(fill="x")
+            if hasattr(self, "local_queue_toolbar") and hasattr(self, "remote_queue_toolbar"):
+                self.local_queue_toolbar.pack_forget()
+                self.remote_queue_toolbar.pack(fill="x", pady=(0, 6))
+            self.update_start_button_state()
+        else:
+            self.remote_box.pack_forget()
+            if hasattr(self, "top_local_source_row") and hasattr(self, "top_remote_source_row"):
+                self.top_remote_source_row.pack_forget()
+                self.top_local_source_row.pack(fill="x")
+            if hasattr(self, "local_queue_toolbar") and hasattr(self, "remote_queue_toolbar"):
+                self.remote_queue_toolbar.pack_forget()
+                self.local_queue_toolbar.pack(fill="x", pady=(0, 6))
+            self.update_start_button_state()
+        self.refresh_hardware_panel()
+
+    def on_remote_preset_selected(self, event=None):
+        sel = self.remote_preset_var.get()
+        for c in self.remote_configs:
+            if f"{c.name} ({c.host})" == sel or c.host == sel:
+                self.remote_host_var.set(c.host)
+                self.remote_port_var.set(str(c.port))
+                self.remote_user_var.set(c.username)
+                if c.password:
+                    self.remote_pwd_var.set(c.password)
+                if c.key_path:
+                    self.remote_key_var.set(c.key_path)
+                break
+
+    def toggle_show_pwd(self):
+        if self.remote_show_pwd_var.get():
+            self.remote_pwd_entry.config(show="")
+        else:
+            self.remote_pwd_entry.config(show="*")
+
+    def browse_ssh_key(self):
+        k = filedialog.askopenfilename(
+            title="Select SSH Private Key (id_rsa, id_ed25519, etc.)",
+            filetypes=[("All Files", "*.*")]
+        )
+        if k:
+            self.remote_key_var.set(k)
+            messagebox.showinfo("SSH Key Loaded", f"Loaded key:\n{k}")
+
+    def save_current_remote_profile(self):
+        host = self.remote_host_var.get().strip()
+        port = int(self.remote_port_var.get().strip() or "22")
+        user = self.remote_user_var.get().strip() or "root"
+        pwd = self.remote_pwd_var.get()
+        key = self.remote_key_var.get().strip() or None
+
+        if not host:
+            messagebox.showwarning("Host Required", "Please enter a valid remote host.")
+            return
+
+        cfg = RemoteHostConfig(
+            host=host,
+            port=port,
+            username=user,
+            password=pwd if pwd else None,
+            key_path=key,
+            name=f"{user}@{host}"
+        )
+        updated = False
+        for idx, c in enumerate(self.remote_configs):
+            if c.host == host:
+                self.remote_configs[idx] = cfg
+                updated = True
+                break
+        if not updated:
+            self.remote_configs.append(cfg)
+
+        save_remote_configs(self.remote_configs)
+        preset_names = [f"{c.name} ({c.host})" for c in self.remote_configs] + ["Custom Host..."]
+        self.remote_preset_cb.config(values=preset_names)
+        messagebox.showinfo("Saved", f"Remote host profile for {host} saved successfully.")
+
+    def toggle_remote_connection(self):
+        if self.remote_manager.is_connected:
+            self.remote_manager.disconnect()
+            self.btn_remote_connect.config(text="🔗 Connect & Detect Hardware", bg=Theme.ACCENT, fg="#000000")
+            self.remote_status_lbl.config(
+                text="🔴 Disconnected. Click 'Connect & Detect Hardware' to link to remote host.",
+                fg=Theme.TEXT_MUTED
+            )
+            self.refresh_hardware_panel()
+            self.status_bar_lbl.config(text="Disconnected from remote server.")
+            return
+
+        host = self.remote_host_var.get().strip()
+        port = int(self.remote_port_var.get().strip() or "22")
+        user = self.remote_user_var.get().strip() or "root"
+        pwd = self.remote_pwd_var.get()
+        key = self.remote_key_var.get().strip() or None
+
+        if not host:
+            messagebox.showerror("Host Required", "Please enter a valid remote host IP or hostname.")
+            return
+
+        cfg = RemoteHostConfig(
+            host=host,
+            port=port,
+            username=user,
+            password=pwd if pwd else None,
+            key_path=key,
+            name=host
+        )
+
+        self.btn_remote_connect.config(state="disabled", text="⏳ Connecting...")
+        self.remote_status_lbl.config(text=f"🟡 Connecting to {user}@{host}:{port} and probing hardware...", fg=Theme.WARNING)
+
+        def _bg_connect():
+            ok, msg = self.remote_manager.connect(cfg)
+            self.post_ui(self._on_remote_connected, ok, msg, cfg)
+
+        threading.Thread(target=_bg_connect, daemon=True).start()
+
+    def _on_remote_connected(self, ok: bool, msg: str, cfg: RemoteHostConfig):
+        self.btn_remote_connect.config(state="normal")
+        if ok:
+            self.btn_remote_connect.config(text="🔌 Disconnect", bg=Theme.DANGER, fg="#ffffff")
+            self.remote_status_lbl.config(text=f"✔ {msg}", fg=Theme.SUCCESS)
+            self.status_bar_lbl.config(text=f"Connected to remote host: {cfg.host}")
+            self.refresh_hardware_panel()
+        else:
+            self.btn_remote_connect.config(text="🔗 Connect & Detect Hardware", bg=Theme.ACCENT, fg="#000000")
+            self.remote_status_lbl.config(text=f"✖ Connection failed: {msg}", fg=Theme.DANGER)
+            messagebox.showerror("Connection Error", f"Could not connect to {cfg.host}:\n{msg}")
+
+    def create_hardware_panel(self):
+        frame = tk.LabelFrame(
+            self.workspace_inner,
+            text="  ⚡ Hardware Acceleration & Multi-Engine Configuration  ",
+            fg=Theme.ACCENT,
+            bg=Theme.PANEL_BG,
+            font=("Segoe UI", 10, "bold"),
+            padx=12,
+            pady=6
+        )
+        frame.pack(fill="x", padx=14, pady=(4, 4))
+
+        self.hw_det_lbl = tk.Label(
             frame,
-            text=summary_str,
-            fg=Theme.SUCCESS if gpu_names else Theme.WARNING,
+            text="Probing hardware acceleration...",
+            fg=Theme.TEXT_MUTED,
             bg=Theme.PANEL_BG,
             font=("Segoe UI", 9)
         )
-        det_lbl.pack(anchor="w", pady=(0, 6))
+        self.hw_det_lbl.pack(anchor="w", pady=(0, 6))
 
-        # Hardware mode selection options
-        mode_row = tk.Frame(frame, bg=Theme.PANEL_BG)
-        mode_row.pack(fill="x")
+        self.hw_mode_row = tk.Frame(frame, bg=Theme.PANEL_BG)
+        self.hw_mode_row.pack(fill="x")
 
-        self.mode_var = tk.StringVar(value="dual_gpu" if len(gpu_names) >= 2 else "auto")
+        self.refresh_hardware_panel()
 
-        options = []
-        if len(gpu_names) >= 2:
-            options.append(("🚀 Dual GPU Mode (Use Both Cards Simultaneously for Max Power)", "dual_gpu"))
-        options.append(("⚡ Auto GPU (Fastest Available Hardware Engine)", "auto"))
+    def refresh_hardware_panel(self):
+        for child in self.hw_mode_row.winfo_children():
+            child.destroy()
 
-        # Individual GPU options
-        for idx, dev in enumerate(self.detected_devices):
-            if dev.vendor != "CPU":
-                options.append((f"⚡ {dev.name} ({dev.encoder}) Only", f"gpu_{idx}"))
-
-        options.append(("🔥 Triple-Engine (Both GPUs + CPU Multithreading)", "all"))
-        options.append(("💻 CPU Only (Software libx265 Multithreading)", "cpu"))
-
-        for label_text, mode_val in options:
-            rb = tk.Radiobutton(
-                mode_row,
-                text=label_text,
-                variable=self.mode_var,
-                value=mode_val,
-                bg=Theme.PANEL_BG,
-                fg=Theme.TEXT,
-                selectcolor=Theme.HEADER_BG,
-                activebackground=Theme.PANEL_BG,
-                activeforeground=Theme.ACCENT,
-                font=("Segoe UI", 9)
+        is_remote = (self.target_mode_var.get() == "remote")
+        if is_remote and self.remote_manager.is_connected:
+            devices = self.remote_manager.remote_devices
+            gpu_names = [f"[{d.vendor}] {d.name}" for d in devices if d.vendor != "CPU"]
+            summary_str = (
+                f"🌐 Remote Hardware ({self.remote_manager.config.host}): " +
+                ("  •  ".join(gpu_names) if gpu_names else "Remote CPU Only")
             )
-            rb.pack(anchor="w", pady=2)
+            self.hw_det_lbl.config(
+                text=summary_str,
+                fg=Theme.SUCCESS if gpu_names else Theme.WARNING
+            )
+
+            gpu_devs = [d for d in devices if d.vendor != "CPU"]
+            options = []
+            if len(gpu_devs) >= 2:
+                options.append((f"🚀 Remote Dual-GPU Mode (Use Both {gpu_devs[0].name} + {gpu_devs[1].name} Simultaneously)", "dual_gpu"))
+            options.append(("⚡ Auto Remote Engine (Fastest Available Hardware Engine)", "auto"))
+            for idx, dev in enumerate(devices):
+                if dev.vendor != "CPU":
+                    options.append((f"⚡ Remote {dev.name} ({dev.encoder}) Only", f"remote_gpu_{idx}"))
+            options.append(("💻 Remote Multi-Core CPU (libx265 Multithreading)", "cpu"))
+
+            self.mode_var.set("dual_gpu" if len(gpu_devs) >= 2 else "auto")
+            for i, (label_text, mode_val) in enumerate(options):
+                rb = tk.Radiobutton(
+                    self.hw_mode_row,
+                    text=label_text,
+                    variable=self.mode_var,
+                    value=mode_val,
+                    bg=Theme.PANEL_BG,
+                    fg=Theme.TEXT,
+                    selectcolor=Theme.HEADER_BG,
+                    activebackground=Theme.PANEL_BG,
+                    activeforeground=Theme.ACCENT,
+                    font=("Segoe UI", 9)
+                )
+                rb.grid(row=i // 2, column=i % 2, sticky="w", padx=(0, 28), pady=1)
+        elif is_remote:
+            self.hw_det_lbl.config(
+                text="🌐 Remote Mode: Not connected to remote host. Connect above to probe remote hardware.",
+                fg=Theme.WARNING
+            )
+            lbl = tk.Label(
+                self.hw_mode_row,
+                text="Please connect to remote server above to query hardware accelerators.",
+                fg=Theme.TEXT_MUTED,
+                bg=Theme.PANEL_BG,
+                font=("Segoe UI", 9, "italic")
+            )
+            lbl.grid(row=0, column=0, sticky="w", pady=4)
+        else:
+            devices = self.detected_devices
+            gpu_names = [f"[{d.vendor}] {d.name}" for d in devices if d.vendor != "CPU"]
+            summary_str = f"Found {len(gpu_names)} GPU(s): " + "  •  ".join(gpu_names) if gpu_names else "No dedicated GPU detected (CPU mode available)"
+            self.hw_det_lbl.config(
+                text=summary_str,
+                fg=Theme.SUCCESS if gpu_names else Theme.WARNING
+            )
+
+            options = []
+            if len(gpu_names) >= 2:
+                options.append(("🚀 Dual GPU Mode (Use Both Cards Simultaneously for Max Power)", "dual_gpu"))
+            options.append(("⚡ Auto GPU (Fastest Available Hardware Engine)", "auto"))
+
+            for idx, dev in enumerate(devices):
+                if dev.vendor != "CPU":
+                    options.append((f"⚡ {dev.name} ({dev.encoder}) Only", f"gpu_{idx}"))
+
+            options.append(("🔥 Triple-Engine (Both GPUs + CPU Multithreading)", "all"))
+            options.append(("💻 CPU Only (Software libx265 Multithreading)", "cpu"))
+
+            self.mode_var.set("dual_gpu" if len(gpu_names) >= 2 else "auto")
+            for i, (label_text, mode_val) in enumerate(options):
+                rb = tk.Radiobutton(
+                    self.hw_mode_row,
+                    text=label_text,
+                    variable=self.mode_var,
+                    value=mode_val,
+                    bg=Theme.PANEL_BG,
+                    fg=Theme.TEXT,
+                    selectcolor=Theme.HEADER_BG,
+                    activebackground=Theme.PANEL_BG,
+                    activeforeground=Theme.ACCENT,
+                    font=("Segoe UI", 9)
+                )
+                rb.grid(row=i // 2, column=i % 2, sticky="w", padx=(0, 28), pady=1)
 
     def create_settings_panel(self):
         frame = tk.LabelFrame(
-            self,
+            self.workspace_inner,
             text="  ⚙ Transcoding & Quality Settings  ",
             fg=Theme.ACCENT,
             bg=Theme.PANEL_BG,
             font=("Segoe UI", 10, "bold"),
             padx=12,
-            pady=8
+            pady=6
         )
-        frame.pack(fill="x", padx=14, pady=6)
+        frame.pack(fill="x", padx=14, pady=4)
 
         # Row 1: CQ/CRF Slider + Preset Dropdown
         r1 = tk.Frame(frame, bg=Theme.PANEL_BG)
@@ -598,7 +1183,7 @@ class TranscoderStudioGUI(tk.Tk):
         ).pack(side="left", padx=(0, 16))
 
         # Output folder selection
-        tk.Label(r2, text="Output Directory:", fg=Theme.TEXT, bg=Theme.PANEL_BG, font=("Segoe UI", 9)).pack(side="left")
+        tk.Label(r2, text="Output Folder (Blank = Same Folder):", fg=Theme.TEXT, bg=Theme.PANEL_BG, font=("Segoe UI", 9)).pack(side="left")
         self.out_dir_var = tk.StringVar(value="")
         self.out_dir_entry = tk.Entry(
             r2,
@@ -607,7 +1192,7 @@ class TranscoderStudioGUI(tk.Tk):
             fg=Theme.TEXT,
             insertbackground=Theme.TEXT,
             relief="solid",
-            width=24
+            width=22
         )
         self.out_dir_entry.pack(side="left", padx=6)
         tk.Button(
@@ -625,53 +1210,52 @@ class TranscoderStudioGUI(tk.Tk):
         self.cq_val_lbl.config(text=f"{v} ({desc})")
 
     def browse_output_dir(self):
-        d = filedialog.askdirectory(title="Select Output Directory for Transcoded Videos")
+        d = filedialog.askdirectory(title="Select Optional Output Folder (Leave Blank to Save Alongside Originals)")
         if d:
             self.out_dir_var.set(d)
 
     def create_queue_panel(self):
         frame = tk.LabelFrame(
-            self,
-            text="  📁 Batch Media Queue  ",
+            self.workspace_inner,
+            text="  📁 2. Batch Media Queue (Directories & Files Scheduled for H.265 Encoding)  ",
             fg=Theme.ACCENT,
             bg=Theme.PANEL_BG,
             font=("Segoe UI", 10, "bold"),
             padx=12,
             pady=6
         )
-        frame.pack(fill="both", expand=True, padx=14, pady=6)
+        frame.pack(fill="both", expand=True, padx=14, pady=4)
 
-        # Toolbar
-        btn_bar = tk.Frame(frame, bg=Theme.PANEL_BG)
-        btn_bar.pack(fill="x", pady=(0, 6))
+        # 1. Local Queue Toolbar
+        self.local_queue_toolbar = tk.Frame(frame, bg=Theme.PANEL_BG)
+        self.local_queue_toolbar.pack(fill="x", pady=(0, 6))
 
         tk.Button(
-            btn_bar,
-            text="➕ Add Media Files...",
+            self.local_queue_toolbar,
+            text="📂 Add Folder / Directory...",
             bg=Theme.ACCENT,
             fg="#000000",
             font=("Segoe UI", 9, "bold"),
             relief="flat",
             padx=10,
             pady=4,
-            command=self.add_files
+            command=self.add_folder
         ).pack(side="left", padx=(0, 6))
 
         tk.Button(
-            btn_bar,
-            text="📂 Add Folder / Directory...",
+            self.local_queue_toolbar,
+            text="➕ Add Media Files...",
             bg=Theme.BORDER,
             fg=Theme.TEXT,
             font=("Segoe UI", 9),
             relief="flat",
             padx=10,
             pady=4,
-            command=self.add_folder
+            command=self.add_files
         ).pack(side="left", padx=4)
 
-        self.recursive_var = tk.BooleanVar(value=True)
         tk.Checkbutton(
-            btn_bar,
+            self.local_queue_toolbar,
             text="Include Subdirectories (Recursive)",
             variable=self.recursive_var,
             bg=Theme.PANEL_BG,
@@ -680,19 +1264,21 @@ class TranscoderStudioGUI(tk.Tk):
             font=("Segoe UI", 8)
         ).pack(side="left", padx=10)
 
-        tk.Button(
-            btn_bar,
-            text="🗑 Remove Selected",
-            bg=Theme.BORDER,
-            fg=Theme.TEXT,
+        self.btn_start_queue_local = tk.Button(
+            self.local_queue_toolbar,
+            text="▶ Start Dual-GPU Transcode",
+            bg=Theme.SUCCESS,
+            fg="#000000",
+            font=("Segoe UI", 10, "bold"),
             relief="flat",
-            padx=8,
+            padx=14,
             pady=4,
-            command=self.remove_selected
-        ).pack(side="right", padx=4)
+            command=self.start_transcode_batch
+        )
+        self.btn_start_queue_local.pack(side="right", padx=(8, 0))
 
         tk.Button(
-            btn_bar,
+            self.local_queue_toolbar,
             text="🧹 Clear All",
             bg=Theme.BORDER,
             fg=Theme.TEXT,
@@ -702,12 +1288,118 @@ class TranscoderStudioGUI(tk.Tk):
             command=self.clear_all
         ).pack(side="right", padx=4)
 
+        tk.Button(
+            self.local_queue_toolbar,
+            text="🗑 Remove Selected",
+            bg=Theme.BORDER,
+            fg=Theme.TEXT,
+            relief="flat",
+            padx=8,
+            pady=4,
+            command=self.remove_selected
+        ).pack(side="right", padx=4)
+
+        # 2. Remote Queue Toolbar (for NAS mounts)
+        self.remote_queue_toolbar = tk.Frame(frame, bg=Theme.PANEL_BG)
+        # Note: packed dynamically in on_target_mode_changed
+
+        tk.Label(
+            self.remote_queue_toolbar,
+            text="Remote NAS Path:",
+            fg=Theme.ACCENT,
+            bg=Theme.PANEL_BG,
+            font=("Segoe UI", 9, "bold")
+        ).pack(side="left", padx=(0, 4))
+
+        self.remote_path_cb = ttk.Combobox(
+            self.remote_queue_toolbar,
+            textvariable=self.remote_path_var,
+            values=[
+                "/data/media/movies",
+                "/data/media/tv-shows",
+                "/mnt/user/data/media",
+                "/data"
+            ],
+            width=42
+        )
+        self.remote_path_cb.pack(side="left", padx=(0, 6))
+
+        self.btn_scan_remote = tk.Button(
+            self.remote_queue_toolbar,
+            text="📂 Scan Remote NAS Directory",
+            bg=Theme.ACCENT,
+            fg="#000000",
+            font=("Segoe UI", 9, "bold"),
+            relief="flat",
+            padx=10,
+            pady=4,
+            command=self.scan_remote_dir
+        )
+        self.btn_scan_remote.pack(side="left", padx=(0, 6))
+
+        tk.Button(
+            self.remote_queue_toolbar,
+            text="📄 Add Remote File...",
+            bg=Theme.BORDER,
+            fg=Theme.TEXT,
+            font=("Segoe UI", 9),
+            relief="flat",
+            padx=8,
+            pady=4,
+            command=self.prompt_add_remote_file
+        ).pack(side="left", padx=(0, 8))
+
+        tk.Checkbutton(
+            self.remote_queue_toolbar,
+            text="Recursive",
+            variable=self.recursive_var,
+            bg=Theme.PANEL_BG,
+            fg=Theme.TEXT_MUTED,
+            selectcolor=Theme.HEADER_BG,
+            font=("Segoe UI", 8)
+        ).pack(side="left", padx=(0, 8))
+
+        self.btn_start_queue_remote = tk.Button(
+            self.remote_queue_toolbar,
+            text="▶ Start Remote NAS Transcode",
+            bg=Theme.SUCCESS,
+            fg="#000000",
+            font=("Segoe UI", 10, "bold"),
+            relief="flat",
+            padx=14,
+            pady=4,
+            command=self.start_transcode_batch
+        )
+        self.btn_start_queue_remote.pack(side="right", padx=(8, 0))
+
+        tk.Button(
+            self.remote_queue_toolbar,
+            text="🧹 Clear All",
+            bg=Theme.BORDER,
+            fg=Theme.TEXT,
+            relief="flat",
+            padx=8,
+            pady=4,
+            command=self.clear_all
+        ).pack(side="right", padx=4)
+
+        tk.Button(
+            self.remote_queue_toolbar,
+            text="🗑 Remove Selected",
+            bg=Theme.BORDER,
+            fg=Theme.TEXT,
+            relief="flat",
+            padx=8,
+            pady=4,
+            command=self.remove_selected
+        ).pack(side="right", padx=4)
+
         # Queue Treeview
         tree_frame = tk.Frame(frame, bg=Theme.PANEL_BG)
         tree_frame.pack(fill="both", expand=True)
 
         cols = ("idx", "status", "filename", "orig_size", "new_size", "saved", "worker", "path")
-        self.tree = ttk.Treeview(tree_frame, columns=cols, show="headings", selectmode="extended")
+        self.tree = ttk.Treeview(tree_frame, columns=cols, show="headings", selectmode="extended", height=6)
 
         self.tree.heading("idx", text="#", anchor="center")
         self.tree.heading("status", text="Status", anchor="center")
@@ -735,15 +1427,15 @@ class TranscoderStudioGUI(tk.Tk):
 
     def create_progress_panel(self):
         frame = tk.LabelFrame(
-            self,
+            self.workspace_inner,
             text="  📊 Visual Level Progress & Live Telemetry  ",
             fg=Theme.ACCENT,
             bg=Theme.PANEL_BG,
             font=("Segoe UI", 10, "bold"),
             padx=12,
-            pady=8
+            pady=6
         )
-        frame.pack(fill="x", padx=14, pady=6)
+        frame.pack(fill="x", padx=14, pady=4)
 
         # 1. Overall Batch Level Meter
         batch_top = tk.Frame(frame, bg=Theme.PANEL_BG)
@@ -799,10 +1491,35 @@ class TranscoderStudioGUI(tk.Tk):
         bar = tk.Frame(self, bg=Theme.HEADER_BG, padx=16, pady=10)
         bar.pack(fill="x", side="bottom")
 
+        # Quick Add Directory / Files buttons on persistent bottom bar too
+        tk.Button(
+            bar,
+            text="📂 Add Directory...",
+            bg=Theme.ACCENT,
+            fg="#000000",
+            font=("Segoe UI", 9, "bold"),
+            relief="flat",
+            padx=12,
+            pady=5,
+            command=self.add_folder
+        ).pack(side="left", padx=(0, 8))
+
+        tk.Button(
+            bar,
+            text="➕ Add Files...",
+            bg=Theme.BORDER,
+            fg=Theme.TEXT,
+            font=("Segoe UI", 9),
+            relief="flat",
+            padx=10,
+            pady=5,
+            command=self.add_files
+        ).pack(side="left", padx=(0, 14))
+
         # Summary text
         self.status_bar_lbl = tk.Label(
             bar,
-            text="Ready. Add video files or directories to start transcoding.",
+            text="Step 1: Click 'Browse Directory...' or paste a folder path above to load videos.",
             fg=Theme.TEXT_MUTED,
             bg=Theme.HEADER_BG,
             font=("Segoe UI", 9)
@@ -848,11 +1565,19 @@ class TranscoderStudioGUI(tk.Tk):
         if files:
             self.append_to_queue(list(files))
 
-    def add_folder(self):
-        d = filedialog.askdirectory(title="Select Directory to Scan for Videos")
-        if not d:
-            return
+    def scan_local_directory_into_queue(self, d: str, show_empty_popup: bool = True) -> int:
+        if not d or not os.path.exists(d):
+            if show_empty_popup:
+                messagebox.showwarning("Invalid Path", f"Directory or file path does not exist:\n{d}")
+            return 0
 
+        if os.path.isfile(d):
+            self.source_dir_var.set(d)
+            self.append_to_queue([d])
+            self.status_bar_lbl.config(text=f"Added video file: {d}")
+            return 1
+
+        self.source_dir_var.set(d)
         recursive = self.recursive_var.get()
         found = []
         if recursive:
@@ -871,9 +1596,152 @@ class TranscoderStudioGUI(tk.Tk):
         found.sort()
         if found:
             self.append_to_queue(found)
-            self.status_bar_lbl.config(text=f"Added {len(found)} video files from {d}")
+            self.status_bar_lbl.config(text=f"✔ Added {len(found)} video file(s) from {d}")
+            return len(found)
         else:
-            messagebox.showinfo("No Videos Found", f"No video files found in:\n{d}")
+            if show_empty_popup:
+                messagebox.showinfo("No Videos Found", f"No video files found in:\n{d}")
+            return 0
+
+    def scan_typed_source_path(self):
+        raw = self.source_dir_var.get().strip().strip('"').strip("'")
+        if not raw:
+            self.add_folder()
+            return
+        self.scan_local_directory_into_queue(raw, show_empty_popup=True)
+
+    def load_cli_paths(self, cli_args: List[str]):
+        for arg in cli_args:
+            clean = arg.strip().strip('"').strip("'")
+            if clean and not clean.startswith("-") and os.path.exists(clean):
+                self.scan_local_directory_into_queue(clean, show_empty_popup=False)
+
+    def add_folder(self):
+        initial = self.source_dir_var.get().strip().strip('"')
+        d = filedialog.askdirectory(
+            title="Select Media Directory to Scan & Transcode",
+            initialdir=initial if (initial and os.path.isdir(initial)) else None
+        )
+        if not d:
+            return
+        self.scan_local_directory_into_queue(d, show_empty_popup=True)
+
+    def scan_remote_dir(self):
+        if not self.remote_manager.is_connected:
+            messagebox.showwarning("Not Connected", "Please connect to the remote host first before scanning.")
+            return
+
+        remote_path = self.remote_path_var.get().strip()
+        if not remote_path:
+            messagebox.showwarning("Path Missing", "Please enter a valid remote directory path.")
+            return
+
+        recursive = self.recursive_var.get()
+        self.status_bar_lbl.config(text=f"🔍 Scanning remote NAS directory on {self.remote_manager.config.host}: {remote_path}...")
+        self.btn_scan_remote.config(state="disabled", text="⏳ Scanning...")
+
+        def _bg_scan():
+            items = self.remote_manager.scan_remote_directory(remote_path, recursive=recursive)
+            self.post_ui(self._on_remote_scan_finished, items, remote_path)
+
+        threading.Thread(target=_bg_scan, daemon=True).start()
+
+    def _on_remote_scan_finished(self, items: List[Dict[str, Any]], remote_path: str):
+        self.btn_scan_remote.config(state="normal", text="📂 Scan Remote NAS Directory")
+        if not items:
+            self.status_bar_lbl.config(text=f"No video files found in remote path: {remote_path}")
+            messagebox.showinfo("No Videos Found", f"No video files found in remote NAS directory:\n{remote_path}")
+            return
+
+        added = 0
+        existing_paths = {item["path"] for item in self.queue_items}
+        for it in items:
+            p = it["path"]
+            if p in existing_paths:
+                continue
+            idx = len(self.queue_items) + 1
+            entry = {
+                "idx": idx,
+                "path": p,
+                "filename": it["filename"],
+                "orig_size": it.get("size", 0),
+                "new_size": 0,
+                "saved_bytes": 0,
+                "saved_pct": 0.0,
+                "status": "⏳ Queued (Remote)",
+                "worker": f"Remote ({self.remote_manager.config.host})",
+                "duration": 0.0,
+                "is_remote": True
+            }
+            self.queue_items.append(entry)
+            self.tree.insert(
+                "",
+                "end",
+                iid=str(idx),
+                values=(
+                    idx,
+                    entry["status"],
+                    entry["filename"],
+                    format_bytes(entry["orig_size"]),
+                    "-",
+                    "-",
+                    entry["worker"],
+                    entry["path"]
+                )
+            )
+            added += 1
+
+        self.update_batch_stats()
+        self.status_bar_lbl.config(text=f"✔ Added {added} remote files from {self.remote_manager.config.host}:{remote_path}")
+
+    def prompt_add_remote_file(self):
+        if not self.remote_manager.is_connected:
+            messagebox.showwarning("Not Connected", "Please connect to the remote host first.")
+            return
+
+        from tkinter import simpledialog
+        p = simpledialog.askstring(
+            "Add Remote File Path",
+            "Enter full path to remote video file on NAS (e.g. /data/media/.../file.mkv):",
+            initialvalue="/data/media/tv-shows/Accused (US)/Season 2/"
+        )
+        if p and p.strip():
+            clean_p = p.strip()
+            existing_paths = {item["path"] for item in self.queue_items}
+            if clean_p in existing_paths:
+                return
+
+            idx = len(self.queue_items) + 1
+            entry = {
+                "idx": idx,
+                "path": clean_p,
+                "filename": os.path.basename(clean_p),
+                "orig_size": 0,
+                "new_size": 0,
+                "saved_bytes": 0,
+                "saved_pct": 0.0,
+                "status": "⏳ Queued (Remote)",
+                "worker": f"Remote ({self.remote_manager.config.host})",
+                "duration": 0.0,
+                "is_remote": True
+            }
+            self.queue_items.append(entry)
+            self.tree.insert(
+                "",
+                "end",
+                iid=str(idx),
+                values=(
+                    idx,
+                    entry["status"],
+                    entry["filename"],
+                    "-",
+                    "-",
+                    "-",
+                    entry["worker"],
+                    entry["path"]
+                )
+            )
+            self.update_batch_stats()
 
     def append_to_queue(self, paths: List[str]):
         existing_paths = {item["path"] for item in self.queue_items}
@@ -957,6 +1825,18 @@ class TranscoderStudioGUI(tk.Tk):
         self.status_bar_lbl.config(
             text=f"Queue: {total} items | {done} completed | Net space saved: {format_bytes(saved)}"
         )
+        if hasattr(self, "top_queue_badge"):
+            queued_bytes = sum(it.get("orig_size", 0) for it in self.queue_items)
+            if total > 0:
+                self.top_queue_badge.config(
+                    text=f"✔ Queue: {total} video(s) ({format_bytes(queued_bytes).strip()})",
+                    fg=Theme.SUCCESS
+                )
+            else:
+                self.top_queue_badge.config(
+                    text="Queue: 0 videos ready",
+                    fg=Theme.WARNING
+                )
 
     # --------------------------------------------------------------------------
     # Video Probe Helper
@@ -1020,6 +1900,8 @@ class TranscoderStudioGUI(tk.Tk):
             if messagebox.askyesno("Stop Transcode", "Are you sure you want to cancel the active batch transcoding?"):
                 self.cancel_requested = True
                 self.status_bar_lbl.config(text="Cancelling active tasks...")
+                if self.target_mode_var.get() == "remote":
+                    self.remote_manager.cancel_active_job()
                 for p in list(self.active_procs.values()):
                     try:
                         p.terminate()
@@ -1028,36 +1910,36 @@ class TranscoderStudioGUI(tk.Tk):
             return
 
         if not self.queue_items:
-            messagebox.showinfo("Queue Empty", "Please add video files or folders before starting transcode.")
+            typed = self.source_dir_var.get().strip().strip('"').strip("'")
+            if self.target_mode_var.get() == "local" and typed and os.path.exists(typed):
+                self.scan_local_directory_into_queue(typed, show_empty_popup=True)
+            elif self.target_mode_var.get() == "local":
+                if messagebox.askyesno(
+                    "Select Media Directory",
+                    "No videos are in the queue yet.\n\nWould you like to choose a media folder/directory to transcode now?"
+                ):
+                    self.add_folder()
+
+        if not self.queue_items:
+            return
+
+        is_remote = (self.target_mode_var.get() == "remote")
+        if is_remote and not self.remote_manager.is_connected:
+            messagebox.showerror("Not Connected", "Please connect to the remote computer first before starting transcode.")
             return
 
         self.is_transcoding = True
         self.cancel_requested = False
         self.is_paused = False
 
-        self.btn_start.config(text="⏹ Stop Transcode", bg=Theme.DANGER, fg="#ffffff")
+        self.update_start_button_state(text="⏹ Stop Transcode", bg=Theme.DANGER, fg="#ffffff")
         self.btn_pause.config(state="normal", text="⏸ Pause Queue", bg=Theme.BORDER, fg=Theme.TEXT)
-
-        # Prepare Hardware Workers according to selected mode
-        mode = self.mode_var.get()
-        workers = self.build_worker_configs(mode)
-
-        # Update card displays
-        if len(workers) >= 1:
-            self.card_worker1.title_lbl.config(text=f"⚡ WORKER 1 ({workers[0]['name']})")
-            self.card_worker1.dev_lbl.config(text=workers[0]["encoder"])
-        if len(workers) >= 2:
-            self.card_worker2.title_lbl.config(text=f"⚡ WORKER 2 ({workers[1]['name']})")
-            self.card_worker2.dev_lbl.config(text=workers[1]["encoder"])
-            self.card_worker2.pack(side="left", fill="x", expand=True, padx=(6, 0))
-        else:
-            self.card_worker2.pack_forget()
 
         # Build Work Queue
         self.work_queue = queue.Queue()
         for it in self.queue_items:
-            if it["status"] not in ("✔ Complete", "⏭ Skipped"):
-                it["status"] = "⏳ Queued"
+            if it["status"] not in ("✔ Complete", "⏭ Skipped (Compliant)", "⏭ Skipped"):
+                it["status"] = "⏳ Queued (Remote)" if is_remote else "⏳ Queued"
                 self.work_queue.put(it)
 
         self.stats["start_time"] = time.time()
@@ -1071,22 +1953,196 @@ class TranscoderStudioGUI(tk.Tk):
             "container": self.container_var.get().split()[0].lower(),
             "skip_hevc": bool(self.skip_hevc_var.get()),
             "in_place": bool(self.in_place_var.get()),
-            "out_dir": self.out_dir_var.get().strip()
+            "out_dir": self.out_dir_var.get().strip(),
+            "mode": self.mode_var.get()
         }
 
-        # Launch Worker Threads
-        for idx, wcfg in enumerate(workers):
-            t = threading.Thread(
-                target=self.worker_thread_proc,
-                args=(idx, wcfg, job_settings),
-                name=f"Worker-{idx+1}",
-                daemon=True
-            )
-            t.start()
-            self.worker_threads.append(t)
+        if is_remote:
+            # Remote transcode workers
+            remote_host = self.remote_manager.config.host if self.remote_manager.config else "Remote"
+            remote_gpus = [d for d in self.remote_manager.remote_devices if d.vendor != "CPU"]
+            mode = self.mode_var.get()
+
+            if mode == "dual_gpu" and len(remote_gpus) >= 2:
+                # Concurrent dual remote GPU workers!
+                wcfgs = [
+                    {"id": 0, "name": remote_gpus[0].name, "gpu_id": remote_gpus[0].index, "encoder": remote_gpus[0].encoder, "extra_args": remote_gpus[0].extra_args},
+                    {"id": 1, "name": remote_gpus[1].name, "gpu_id": remote_gpus[1].index, "encoder": remote_gpus[1].encoder, "extra_args": remote_gpus[1].extra_args}
+                ]
+                self.card_worker1.title_lbl.config(text=f"⚡ REMOTE WORKER 1 ({remote_gpus[0].name})")
+                self.card_worker1.dev_lbl.config(text=f"{remote_gpus[0].encoder} [GPU {remote_gpus[0].index}]")
+                self.card_worker2.title_lbl.config(text=f"⚡ REMOTE WORKER 2 ({remote_gpus[1].name})")
+                self.card_worker2.dev_lbl.config(text=f"{remote_gpus[1].encoder} [GPU {remote_gpus[1].index}]")
+                self.card_worker2.pack(side="left", fill="x", expand=True, padx=(6, 0))
+
+                for idx, wcfg in enumerate(wcfgs):
+                    t = threading.Thread(
+                        target=self.remote_worker_thread_proc,
+                        args=(idx, wcfg, job_settings),
+                        name=f"RemoteWorker-{idx+1}",
+                        daemon=True
+                    )
+                    t.start()
+                    self.worker_threads.append(t)
+            else:
+                # Single remote worker
+                wcfg = {"id": 0, "name": "Remote Engine", "encoder": "auto"}
+                if mode.startswith("remote_gpu_"):
+                    try:
+                        g_idx = int(mode.split("_")[-1])
+                        target_g = self.remote_manager.remote_devices[g_idx]
+                        wcfg = {
+                            "id": 0,
+                            "name": target_g.name,
+                            "gpu_id": target_g.index,
+                            "encoder": target_g.encoder,
+                            "extra_args": target_g.extra_args,
+                            "device_node": target_g.device_node
+                        }
+                    except Exception:
+                        pass
+                elif mode == "cpu":
+                    wcfg = {"id": 0, "name": "Remote CPU", "encoder": "libx265"}
+
+                self.card_worker1.title_lbl.config(text=f"🌐 REMOTE WORKER ({remote_host})")
+                self.card_worker1.dev_lbl.config(text=wcfg.get("name", "Auto"))
+                self.card_worker2.pack_forget()
+
+                t = threading.Thread(
+                    target=self.remote_worker_thread_proc,
+                    args=(0, wcfg, job_settings),
+                    name="RemoteWorker-1",
+                    daemon=True
+                )
+                t.start()
+                self.worker_threads.append(t)
+        else:
+            # Local multi-GPU workers
+            mode = self.mode_var.get()
+            workers = self.build_worker_configs(mode)
+
+            # Update card displays
+            if len(workers) >= 1:
+                self.card_worker1.title_lbl.config(text=f"⚡ WORKER 1 ({workers[0]['name']})")
+                self.card_worker1.dev_lbl.config(text=workers[0]["encoder"])
+            if len(workers) >= 2:
+                self.card_worker2.title_lbl.config(text=f"⚡ WORKER 2 ({workers[1]['name']})")
+                self.card_worker2.dev_lbl.config(text=workers[1]["encoder"])
+                self.card_worker2.pack(side="left", fill="x", expand=True, padx=(6, 0))
+            else:
+                self.card_worker2.pack_forget()
+
+            # Launch Worker Threads
+            for idx, wcfg in enumerate(workers):
+                t = threading.Thread(
+                    target=self.worker_thread_proc,
+                    args=(idx, wcfg, job_settings),
+                    name=f"Worker-{idx+1}",
+                    daemon=True
+                )
+                t.start()
+                self.worker_threads.append(t)
 
         # Monitor thread to detect batch completion
         threading.Thread(target=self.monitor_batch_completion, daemon=True).start()
+
+    def remote_worker_thread_proc(self, worker_idx: int, wcfg: Dict[str, Any], settings: Dict[str, Any]):
+        """Runs transcode queue items directly on the remote machine across SSH."""
+        card_widget = self.card_worker1 if worker_idx == 0 else self.card_worker2
+        remote_host = self.remote_manager.config.host if self.remote_manager.config else "Remote"
+
+        while not self.cancel_requested:
+            while self.is_paused and not self.cancel_requested:
+                time.sleep(0.5)
+
+            try:
+                item = self.work_queue.get_nowait()
+            except queue.Empty:
+                break
+
+            file_path = item["path"]
+            item["worker"] = f"{wcfg['name']} ({remote_host})"
+            item["status"] = f"⚡ Transcoding ({wcfg.get('encoder', 'hevc_nvenc')})"
+            self.post_ui(self.update_item_row, item)
+
+            start_t = time.time()
+
+            def on_remote_progress(telemetry):
+                frac = telemetry.get("progress", 0.0)
+                speed = telemetry.get("speed", "N/A")
+                fps = telemetry.get("fps", "0")
+                bitrate = telemetry.get("bitrate", "N/A")
+                out_sec = 0.0
+                try:
+                    out_sec = float(telemetry.get("out_sec", 0.0))
+                except ValueError:
+                    pass
+                tot_sec = 0.0
+                try:
+                    tot_sec = float(telemetry.get("total_sec", 0.0))
+                except ValueError:
+                    pass
+
+                elapsed_str = format_duration(time.time() - start_t)
+                eta_str = telemetry.get("eta", "--:--:--")
+                if eta_str == "--:--:--" and speed not in ("N/A", ""):
+                    try:
+                        sp_val = float(speed.rstrip("x"))
+                        if sp_val > 0.05 and tot_sec > out_sec:
+                            eta_str = format_duration((tot_sec - out_sec) / sp_val)
+                    except Exception:
+                        pass
+
+                self.post_ui(
+                    card_widget.update_telemetry,
+                    item["filename"],
+                    frac,
+                    speed,
+                    fps,
+                    bitrate,
+                    elapsed_str,
+                    eta_str
+                )
+
+            def on_remote_result(res):
+                st = res.get("status")
+                if st == "complete":
+                    item["new_size"] = res.get("new_size", item["orig_size"])
+                    item["saved_bytes"] = res.get("saved_bytes", 0)
+                    item["saved_pct"] = res.get("saved_pct", 0.0)
+                elif st == "skipped":
+                    item["new_size"] = item["orig_size"]
+                    item["saved_bytes"] = 0
+                    item["saved_pct"] = 0.0
+
+            success, res_dict = self.remote_manager.run_remote_transcode(
+                file_path=file_path,
+                settings=settings,
+                worker_cfg=wcfg,
+                on_progress=on_remote_progress,
+                on_result=on_remote_result
+            )
+
+            if self.cancel_requested:
+                item["status"] = "⏹ Cancelled"
+            elif success:
+                if res_dict.get("status") == "skipped":
+                    item["status"] = "⏭ Skipped (Compliant)"
+                    item["new_size"] = item["orig_size"]
+                else:
+                    item["status"] = "✔ Complete"
+                    if res_dict.get("new_size"):
+                        item["new_size"] = res_dict["new_size"]
+                        item["saved_bytes"] = res_dict.get("saved_bytes", 0)
+                        item["saved_pct"] = res_dict.get("saved_pct", 0.0)
+            else:
+                item["status"] = "✖ Failed"
+
+            self.post_ui(self.update_item_row, item)
+            self.post_ui(self.update_batch_stats)
+            self.work_queue.task_done()
+
+        self.post_ui(card_widget.set_idle, "Status: Idle / Ready")
 
     def build_worker_configs(self, mode: str) -> List[Dict[str, Any]]:
         """Construct hardware worker definitions based on user selection."""
@@ -1451,13 +2507,15 @@ class TranscoderStudioGUI(tk.Tk):
 
     def finish_batch_ui(self):
         self.is_transcoding = False
-        self.btn_start.config(text="▶ Start Dual-GPU Transcode", bg=Theme.SUCCESS, fg="#000000")
+        is_remote = (self.target_mode_var.get() == "remote")
+        self.update_start_button_state()
         self.btn_pause.config(state="disabled", text="⏸ Pause Queue", bg=Theme.BORDER, fg=Theme.TEXT)
 
         self.update_batch_stats()
         if not self.cancel_requested:
             self.overall_bar.update_progress(1.0, "LVL MAX", "100.0%")
-            messagebox.showinfo("Transcode Complete", "Batch transcoding finished successfully across all GPU engines!")
+            target_str = "remote host" if is_remote else "all GPU engines"
+            messagebox.showinfo("Transcode Complete", f"Batch transcoding finished successfully across {target_str}!")
         else:
             self.status_bar_lbl.config(text="Batch transcode was cancelled by user.")
 
