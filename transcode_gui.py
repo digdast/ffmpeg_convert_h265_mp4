@@ -741,7 +741,7 @@ class TranscoderStudioGUI(tk.Tk):
 
         # Host
         tk.Label(r1, text="Host IP:", fg=Theme.TEXT, bg=Theme.HEADER_BG, font=("Segoe UI", 9)).pack(side="left", padx=(0, 4))
-        self.remote_host_var = tk.StringVar(value=self.remote_configs[0].host if self.remote_configs else "192.168.0.31")
+        self.remote_host_var = tk.StringVar(value=self.remote_configs[0].host if self.remote_configs else "192.168.40.31")
         tk.Entry(r1, textvariable=self.remote_host_var, width=13, bg=Theme.BG, fg=Theme.TEXT, insertbackground=Theme.TEXT, relief="solid").pack(side="left", padx=(0, 8))
 
         # Port

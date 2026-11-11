@@ -226,7 +226,7 @@ python transcode_media.py --gui
 ### Key GUI Highlights:
 1. **Target Environment Selector**:
    - **Local Machine**: Automatically uses your local dual GPUs (NVIDIA NVENC, Intel UHD/Iris QSV, AMD AMF, CPU).
-   - **Remote Computer / NAS (SSH)**: Connect to any remote server (e.g. Proxmox `192.168.0.31`, Media VM `192.168.0.19`, or TrueNAS `192.168.0.3`).
+   - **Remote Computer / NAS (SSH)**: Connect to any remote server (e.g. Proxmox `192.168.40.31`, Media VM `192.168.0.19`, or TrueNAS `192.168.0.3`).
 2. **Direct Remote NAS Execution (Zero Network Bottlenecks)**:
    - Encodes directly on the remote server's silicon against mounted NAS storage (e.g. `/data/media/tv-shows`, `/mnt/user/data/media`).
    - Does NOT transfer raw media files over your local network.

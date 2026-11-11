@@ -79,7 +79,7 @@ class RemoteHostConfig:
 
 DEFAULT_PRESET_CONFIGS = [
     RemoteHostConfig(host="192.168.0.17", port=22, username="plexadmin", password="sone_420", name="ai-auto (Dual GPU: RTX 5070 + RTX 3060)"),
-    RemoteHostConfig(host="192.168.0.31", port=22, username="root", password="sone_420", name="pve-01 (Proxmox Host / Intel Iris GPU)"),
+    RemoteHostConfig(host="192.168.40.31", port=22, username="root", password="sone_420", name="pve-01 (Proxmox Host / Intel Iris GPU)"),
     RemoteHostConfig(host="192.168.0.19", port=22, username="root", name="arr-server (Media Host / NFS Mount /data)"),
     RemoteHostConfig(host="192.168.0.3", port=22, username="root", name="nas-01-data (TrueNAS 52TB Storage)"),
 ]
